@@ -1,0 +1,9 @@
+{
+  "mcp_servers": {
+    "web_search": {
+      "command": "python",
+      "args": ["-m", "mcp_extension.servers.web_search"],
+      "cwd": "."
+    }
+  }
+}

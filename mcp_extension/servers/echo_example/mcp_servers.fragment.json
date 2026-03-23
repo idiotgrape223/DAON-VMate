@@ -1,0 +1,9 @@
+{
+  "mcp_servers": {
+    "echo_example": {
+      "command": "python",
+      "args": ["-m", "mcp_extension.servers.echo_example"],
+      "cwd": "."
+    }
+  }
+}

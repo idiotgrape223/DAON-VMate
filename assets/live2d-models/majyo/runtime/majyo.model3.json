@@ -1,0 +1,55 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "majyo.moc3",
+		"Textures": [
+			"majyo.8192/texture_00.png",
+			"majyo.8192/texture_01.png"
+		],
+		"Physics": "majyo.physics3.json",
+		"DisplayInfo": "majyo.cdi3.json",
+		"Expressions": [
+			{ "Name": "cw", "File": "cw.exp3.json" },
+			{ "Name": "fz", "File": "fz.exp3.json" },
+			{ "Name": "h", "File": "h.exp3.json" },
+			{ "Name": "hdj", "File": "hdj.exp3.json" },
+			{ "Name": "ku", "File": "ku.exp3.json" },
+			{ "Name": "mz", "File": "mz.exp3.json" },
+			{ "Name": "sq", "File": "sq.exp3.json" },
+			{ "Name": "x", "File": "x.exp3.json" },
+			{ "Name": "xx", "File": "xx.exp3.json" },
+			{ "Name": "yj", "File": "yj.exp3.json" },
+			{ "Name": "zs1", "File": "zs1.exp3.json" },
+			{ "Name": "zs2", "File": "zs2.exp3.json" }
+		],
+		"Motions": {
+			"Idle": [
+				{
+					"File": "Scene1.motion3.json"
+				}
+			],
+			"Tap": [
+				{
+					"File": "Scene1.motion3.json"
+				}
+			]
+		}
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthOpenY"
+			]
+		}
+	]
+}

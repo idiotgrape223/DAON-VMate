@@ -1,0 +1,17 @@
+.venv/
+.Cursor/
+# Cursor debug session NDJSON
+debug-*.log
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
+*.pyzwzwz
+*.pyzwzwzw
+

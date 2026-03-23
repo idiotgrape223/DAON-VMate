@@ -1,0 +1,52 @@
+[
+    {
+        "name": "majyo",
+        "description": "",
+        "url": "/live2d-models/majyo/runtime/majyo.model3.json",
+        "kScale": 0.5,
+        "initialXshift": 0,
+        "initialYshift": 0,
+        "kXOffset": 1150,
+        "idleMotionGroupName": "Idle",
+        "emotionMotionGroup": "Idle",
+        "emotionMap": {
+            "neutral": 0,
+            "anger": 6,
+            "disgust": 2,
+            "fear": 2,
+            "joy": 7,
+            "smirk": 9,
+            "sadness": 4,
+            "surprise": 8
+        },
+        "genericTap": {
+            "group": "Tap",
+            "index": 0
+        }
+    },
+    {
+        "name": "Alexia",
+        "description": "",
+        "url": "/live2d-models/Alexia/runtime/Alexia.model3.json",
+        "kScale": 0.5,
+        "initialXshift": 0,
+        "initialYshift": 0,
+        "kXOffset": 1150,
+        "idleMotionGroupName": "Idle",
+        "emotionMotionGroup": "",
+        "emotionMap": {
+            "neutral": 0,
+            "anger": 7,
+            "disgust": 10,
+            "fear": 2,
+            "joy": 5,
+            "smirk": 9,
+            "sadness": 3,
+            "surprise": 8
+        },
+        "genericTap": {
+            "group": "",
+            "index": 0
+        }
+    }
+]

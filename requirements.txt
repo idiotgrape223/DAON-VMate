@@ -1,0 +1,33 @@
+# GUI Framework
+PySide6>=6.8.0
+
+# Native Live2D Rendering
+live2d-py>=0.6.1
+
+# HTTP Requests (for Ollama & GPT-SoVITS API calls)
+requests>=2.31.0
+aiohttp>=3.9.3
+
+# Edge TTS
+edge-tts>=6.1.0
+miniaudio>=1.59
+
+# Configuration
+PyYAML>=6.0.1
+
+# Audio playback and processing
+sounddevice>=0.4.6
+numpy>=2.0.0
+scipy>=1.12.0
+
+# Logging
+loguru>=0.7.2
+
+# PDF
+pypdf>=5.0.0
+
+# MCP stdio client
+mcp>=1.2.0
+
+# mcp_extension.servers.web_search (DuckDuckGo)
+duckduckgo-search>=6.0.0
