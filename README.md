@@ -107,6 +107,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+assets/live2d-models의 기본 모델을 이용하여 테스트 해볼 수 있습니다. 추후, 모델 추가관련 부분을 손 봐서 live2d 모델 추가를 좀 더 쉽게 할 수 있도록 수정 할 예정입니다.
+
 ---
 
 ## 설정
