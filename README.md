@@ -131,7 +131,7 @@ python main.py
 
 ---
 
-## Defualt LIVE2D 모델
+## Default LIVE2D 모델
   - [majyo](https://booth.pm/en/items/6499774)
   - [Alexia](https://booth.pm/en/items/5576188)
   
