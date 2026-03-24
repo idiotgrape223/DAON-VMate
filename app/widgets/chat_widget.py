@@ -56,7 +56,10 @@ from core.llm_attachments import (
     load_attachment_from_path,
 )
 from core.live2d_character_settings import get_assistant_display_name
-from core.live2d_emotion_tags import assistant_history_plain
+from core.live2d_emotion_tags import (
+    assistant_history_plain,
+    assistant_thinking_display_body_html,
+)
 from core.model_profile import repo_root
 
 class ChatWidget(QFrame):
@@ -504,14 +507,27 @@ class ChatWidget(QFrame):
         if not self._type_timer.isActive():
             self._type_timer.start()
 
+    def _assistant_bubble_body_html(self, raw_text: str) -> str:
+        cfg = getattr(self.parent, "config", None) or {}
+        styled = assistant_thinking_display_body_html(
+            raw_text,
+            cfg,
+            think_color=self._c_muted,
+            body_color=self._c_body,
+        )
+        if styled is not None:
+            return styled
+        show = assistant_history_plain(raw_text, cfg)
+        esc = html.escape(show).replace("\n", "<br/>")
+        return f'<span style="color:{self._c_body};">{esc}</span>'
+
     def _update_pending_label_html(self) -> None:
         if not self._pending_reply_label:
             return
         plain = getattr(self, "_streaming_plain", "") or ""
-        body = html.escape(plain).replace("\n", "<br/>")
+        body = self._assistant_bubble_body_html(plain)
         self._pending_reply_label.setText(
-            self._assistant_name_span_html()
-            + f'<span style="color:{self._c_body};">{body}</span>'
+            self._assistant_name_span_html() + body
         )
 
     def _release_stream_segments_if_caught_up(self) -> None:
@@ -670,10 +686,21 @@ class ChatWidget(QFrame):
             content = (m.get("content") or "").strip()
             if not content:
                 continue
-            body = html.escape(content).replace("\n", "<br/>")
             if role == "user":
+                body = html.escape(content).replace("\n", "<br/>")
                 self.add_message("User", body, is_user=True)
             elif role == "assistant":
+                cfg = getattr(self.parent, "config", None) or {}
+                styled = assistant_thinking_display_body_html(
+                    content,
+                    cfg,
+                    think_color=self._c_muted,
+                    body_color=self._c_body,
+                )
+                if styled is not None:
+                    body = styled
+                else:
+                    body = html.escape(content).replace("\n", "<br/>")
                 self.add_message(aname, body, is_user=False)
         QTimer.singleShot(0, self._scroll_to_bottom)
 
@@ -787,12 +814,9 @@ class ChatWidget(QFrame):
     def _finish_pending_assistant(self, text: str) -> None:
         self._wait_timer.stop()
         if self._pending_reply_label:
-            cfg = getattr(self.parent, "config", None) or {}
-            show = assistant_history_plain(text or "", cfg)
-            body = html.escape(show).replace("\n", "<br/>")
+            body = self._assistant_bubble_body_html(text or "")
             self._pending_reply_label.setText(
-                self._assistant_name_span_html()
-                + f'<span style="color:{self._c_body};">{body}</span>'
+                self._assistant_name_span_html() + body
             )
             self._pending_reply_label = None
         self._scroll_to_bottom()
@@ -877,6 +901,16 @@ class ChatWidget(QFrame):
         if int(invoke_gen) != self._stream_invoke_gen:
             return
         self.parent.live2d_view.apply_emotion_for_assistant_text(rolled)
+
+    @Slot(int, int, int)
+    def _schedule_stream_tts_segment(
+        self, invoke_gen: int, segment_idx: int, release_after_len: int
+    ) -> None:
+        """사고 모드 스트리밍: 전체 답이 타이핑된 뒤에만 TTS 구간 재생이 풀리도록 잠금 길이 등록."""
+        if int(invoke_gen) != self._stream_invoke_gen:
+            return
+        self._stream_segment_release_at[int(segment_idx)] = int(release_after_len)
+        self._release_stream_segments_if_caught_up()
 
     @Slot(int, int, str)
     def _on_text_batch(self, invoke_gen: int, segment_idx: int, batch: str) -> None:

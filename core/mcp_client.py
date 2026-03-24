@@ -116,7 +116,12 @@ class MCPClientService:
                 continue
             cmd = str(spec.get("command") or "").strip()
             if not cmd:
-                self._server_errors[str(name)] = "missing command"
+                if spec.get("url"):
+                    self._server_errors[str(name)] = (
+                        "url/sse/http 전송은 미지원입니다. stdio용 command/args만 사용하세요."
+                    )
+                else:
+                    self._server_errors[str(name)] = "missing command"
                 continue
             args = spec.get("args")
             if args is None:
@@ -126,7 +131,12 @@ class MCPClientService:
             else:
                 arg_list = [str(args)]
             env = spec.get("env")
-            env_dict = dict(env) if isinstance(env, dict) else None
+            if isinstance(env, dict):
+                env_dict = os.environ.copy()
+                for k, v in env.items():
+                    env_dict[str(k)] = "" if v is None else str(v)
+            else:
+                env_dict = None
             cwd = spec.get("cwd")
             cwd_path = str(cwd).strip() if cwd else None
             if cwd_path and not os.path.isabs(cwd_path):

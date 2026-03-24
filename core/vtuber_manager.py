@@ -2,13 +2,26 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from core.live2d_emotion_tags import assistant_history_plain
+from core.live2d_emotion_tags import (
+    assistant_history_plain,
+    strip_thinking_mode_answer_only,
+)
 from core.llm_attachments import LLMMediaAttachment, format_user_text_for_history
 from core.llm_engine import LLMEngine
 from core.tts_engine import TTSEngine
 
 # user/assistant 쌍 개수 상한 (너무 길면 컨텍스트 비대)
 _MAX_HISTORY_PAIRS = 16
+
+
+def _assistant_content_for_history(assistant_full: str, fc: dict[str, Any]) -> str:
+    """LLM 컨텍스트용 assistant 문자열. 사고 모드일 때는 ### 사고/답변 구조를 유지해 형식이 무너지지 않게 함."""
+    thinking = bool((fc.get("llm") or {}).get("thinking_mode", False))
+    if thinking:
+        return assistant_history_plain(assistant_full, fc).strip()
+    return assistant_history_plain(
+        strip_thinking_mode_answer_only(assistant_full, fc), fc
+    ).strip()
 
 
 class VTuberManager:
@@ -73,10 +86,10 @@ class VTuberManager:
         if assistant_full.startswith("[LLM]") or assistant_full.startswith("[오류]"):
             return
         fc = getattr(self.llm_engine, "_full_config", {}) or {}
-        assistant_plain = assistant_history_plain(assistant_full, fc)
+        assistant_plain = _assistant_content_for_history(assistant_full, fc)
         self._chat_history.append({"role": "user", "content": user_text})
         self._chat_history.append(
-            {"role": "assistant", "content": assistant_plain.strip()}
+            {"role": "assistant", "content": assistant_plain}
         )
         self._trim_history()
         self._notify_history_changed()
@@ -103,10 +116,16 @@ class VTuberManager:
         )
 
         fc = getattr(self.llm_engine, "_full_config", {}) or {}
-        tts_text = assistant_history_plain(response_text, fc).strip()
+        for_tts = strip_thinking_mode_answer_only(response_text, fc)
+        tts_text = assistant_history_plain(for_tts, fc).strip()
         if not response_text.startswith("[LLM]"):
             self._chat_history.append({"role": "user", "content": hist_user})
-            self._chat_history.append({"role": "assistant", "content": tts_text})
+            self._chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": _assistant_content_for_history(response_text, fc),
+                }
+            )
             self._trim_history()
             self._notify_history_changed()
 

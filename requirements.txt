@@ -29,5 +29,7 @@ pypdf>=5.0.0
 # MCP stdio client
 mcp>=1.2.0
 
-# mcp_extension.servers.web_search (DuckDuckGo)
+# mcp_extension.servers.web_search (Google 우선, 폴백 DuckDuckGo)
+googlesearch-python>=1.2.3
 duckduckgo-search>=6.0.0
+

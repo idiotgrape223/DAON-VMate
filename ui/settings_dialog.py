@@ -393,6 +393,19 @@ class SettingsDialog(QDialog):
         fl.addRow(self.chk_mouse_tracking)
         layout.addWidget(g_live)
 
+        g_llm_behavior = QGroupBox("LLM")
+        fl_llm = QFormLayout(g_llm_behavior)
+        fl_llm.setSpacing(10)
+        self.chk_thinking_mode = QCheckBox("사고 모드 (Thinking mode)")
+        self.chk_thinking_mode.setToolTip(
+            "켜면 시스템 프롬프트에 지시가 추가되어, 답변 전에 ### 사고 … ### 답변 형식으로 "
+            "추론 과정을 먼저 씁니다. MCP 도구 전용 턴은 예외로 마커만 출력합니다.\n"
+            "TTS·다음 대화용 히스토리에는 ### 답변 이후만 넣습니다. "
+            "스트리밍+TTS 사용 시 사고 구간이 음성에 섞일 수 있으니 필요하면 스트리밍을 끄세요."
+        )
+        fl_llm.addRow(self.chk_thinking_mode)
+        layout.addWidget(g_llm_behavior)
+
         g_win = QGroupBox("창 (UI)")
         fw = QFormLayout(g_win)
         self.spin_w = QSpinBox()
@@ -684,6 +697,12 @@ class SettingsDialog(QDialog):
         self.chk_llm_use_mcp_tools = QCheckBox(
             "채팅에서 MCP 도구 사용"
         )
+        self.chk_llm_use_mcp_tools.setToolTip(
+            "LLM이 <<<DAON_MCP_CALLS>>> 블록으로 도구를 호출합니다.\n"
+            "fragment에 등록된 서버가 합쳐집니다(예: web_search, file_agent).\n"
+            "web_search: Google 우선(CSE는 서버 env에 VMATE_GOOGLE_CSE_API_KEY·VMATE_GOOGLE_CSE_CX).\n"
+            "file_agent: workspace/ 폴더 파일 읽기·쓰기·삭제·목록."
+        )
         f.addRow(self.chk_llm_use_mcp_tools)
         self.spin_mcp_max_rounds = QSpinBox()
         self.spin_mcp_max_rounds.setRange(1, 32)
@@ -723,6 +742,7 @@ class SettingsDialog(QDialog):
             bool(live.get("auto_emotion_from_assistant", True))
         )
         self.chk_mouse_tracking.setChecked(bool(ui.get("mouse_tracking", True)))
+        self.chk_thinking_mode.setChecked(bool(llm.get("thinking_mode", False)))
         self.spin_w.setValue(int(ui.get("window_width", 1280)))
         self.spin_h.setValue(int(ui.get("window_height", 720)))
         self.chk_top.setChecked(bool(ui.get("always_on_top", False)))
@@ -919,6 +939,7 @@ class SettingsDialog(QDialog):
         c["llm"]["system_prompt"] = self.text_llm_system.toPlainText()
         c["llm"]["use_mcp_tools"] = self.chk_llm_use_mcp_tools.isChecked()
         c["llm"]["mcp_max_rounds"] = int(self.spin_mcp_max_rounds.value())
+        c["llm"]["thinking_mode"] = self.chk_thinking_mode.isChecked()
 
         c["tts"]["provider"] = self.combo_tts_provider.currentText()
         c["tts"]["api_url"] = self.edit_tts_url.text().strip()
