@@ -23,7 +23,7 @@ QMenu#petDesktopContextMenu::item:selected {
 }
 """
 
-# Live2D 상단 오버레이: 반투명 바 + 자식 QPushButton (화면 공유 / 캐릭터 모드 / 설정)
+# Live2D 상단 오버레이: 반투명 바 + 자식 QPushButton (화면 공유 / 캐릭터 모드 / 대화 기록 / 설정)
 LIVE2D_TOP_BAR_QSS = """
 #live2dTopBar {
     background-color: rgba(24, 24, 37, 0.9);
@@ -53,6 +53,48 @@ LIVE2D_TOP_BAR_QSS = """
     subcontrol-origin: padding;
     subcontrol-position: center right;
     right: 6px;
+}
+#live2dTopBar QPushButton#chatHistoryToggleBtn:checked {
+    background-color: rgba(137, 180, 250, 0.24);
+    border-color: rgba(137, 180, 250, 0.8);
+    color: #ffffff;
+}
+"""
+
+LIVE2D_TOP_BAR_LIGHT_QSS = """
+#live2dTopBar {
+    background-color: rgba(248, 249, 252, 0.94);
+    border: none;
+    border-bottom: 1px solid rgba(0, 86, 179, 0.18);
+}
+#live2dTopBar QPushButton {
+    padding: 7px 16px;
+    min-height: 22px;
+    background-color: rgba(255, 255, 255, 0.98);
+    color: #222222;
+    border: 1px solid #c8ccd4;
+    border-radius: 9px;
+}
+#live2dTopBar QPushButton:hover {
+    background-color: #ffffff;
+    border-color: #007bff;
+    color: #0056b3;
+}
+#live2dTopBar QPushButton:pressed {
+    background-color: #e9ecef;
+    border-color: #0069d9;
+}
+#live2dTopBar QPushButton::menu-indicator {
+    width: 14px;
+    height: 8px;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 6px;
+}
+#live2dTopBar QPushButton#chatHistoryToggleBtn:checked {
+    background-color: rgba(13, 110, 253, 0.12);
+    border-color: #0d6efd;
+    color: #0b5cbf;
 }
 """
 

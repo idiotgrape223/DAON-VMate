@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from core.live2d_emotion_tags import assistant_history_plain
 from core.llm_attachments import LLMMediaAttachment, format_user_text_for_history
@@ -20,6 +20,24 @@ class VTuberManager:
         self.llm_engine = LLMEngine(config)
         self.tts_engine = TTSEngine(config)
         self._chat_history: list[dict[str, str]] = []
+        self._history_listeners: list[Callable[[], None]] = []
+
+    def add_history_listener(self, cb: Callable[[], None]) -> None:
+        if cb not in self._history_listeners:
+            self._history_listeners.append(cb)
+
+    def remove_history_listener(self, cb: Callable[[], None]) -> None:
+        try:
+            self._history_listeners.remove(cb)
+        except ValueError:
+            pass
+
+    def _notify_history_changed(self) -> None:
+        for cb in list(self._history_listeners):
+            try:
+                cb()
+            except Exception:
+                pass
 
     def reload_from_config(self, config: dict) -> None:
         self.llm_engine.set_full_config(config)
@@ -31,6 +49,17 @@ class VTuberManager:
 
     def clear_chat_history(self) -> None:
         self._chat_history.clear()
+
+    def set_chat_history(self, messages: list[dict[str, str]]) -> None:
+        self._chat_history.clear()
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "").strip()
+            content = str(m.get("content") or "")
+            if role in ("user", "assistant") and content.strip():
+                self._chat_history.append({"role": role, "content": content})
+        self._trim_history()
 
     def history_snapshot(self) -> list[dict[str, str]]:
         return list(self._chat_history)
@@ -50,6 +79,7 @@ class VTuberManager:
             {"role": "assistant", "content": assistant_plain.strip()}
         )
         self._trim_history()
+        self._notify_history_changed()
 
     def _trim_history(self) -> None:
         max_msgs = _MAX_HISTORY_PAIRS * 2
@@ -78,6 +108,7 @@ class VTuberManager:
             self._chat_history.append({"role": "user", "content": hist_user})
             self._chat_history.append({"role": "assistant", "content": tts_text})
             self._trim_history()
+            self._notify_history_changed()
 
         audio_data = self.tts_engine.generate_audio(tts_text)
         return response_text, audio_data

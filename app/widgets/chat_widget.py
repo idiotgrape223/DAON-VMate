@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -54,19 +55,21 @@ from core.llm_attachments import (
     MAX_LLM_ATTACHMENTS,
     load_attachment_from_path,
 )
+from core.live2d_character_settings import get_assistant_display_name
 from core.live2d_emotion_tags import assistant_history_plain
-
+from core.model_profile import repo_root
 
 class ChatWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setStyleSheet("""
-            QFrame {
-                background-color: rgba(255, 255, 255, 220);
-                border-radius: 10px;
-            }
-        """)
+        self._dark_mode = True
+        self._c_body = "#cdd6f4"
+        self._c_user = "#89b4fa"
+        self._c_assist = "#f5c2e7"
+        self._c_muted = "#7f849c"
+        self._c_err = "#f38ba8"
+        self.setObjectName("vmateChatFrame")
         self.setFixedHeight(200)
 
         self._chat_thread: Optional[QThread] = None
@@ -98,6 +101,7 @@ class ChatWidget(QFrame):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background: transparent; border: none;")
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         self.history_widget = QWidget()
         self.history_layout = QVBoxLayout()
@@ -110,9 +114,6 @@ class ChatWidget(QFrame):
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
         self._apply_input_placeholder_for_assistant()
-        self.input_field.setStyleSheet(
-            "padding: 8px; border-radius: 5px; border: 1px solid #ccc; background: white;"
-        )
         self.input_field.returnPressed.connect(self.send_message)
 
         self.btn_attach = QToolButton(self)
@@ -122,10 +123,6 @@ class ChatWidget(QFrame):
             "OpenAI 호환 API는 PDF를 파일 파트로 보내고, Ollama는 추출 텍스트를 넣습니다."
         )
         self.btn_attach.setFixedSize(34, 34)
-        self.btn_attach.setStyleSheet(
-            "QToolButton { border: 1px solid #ccc; border-radius: 5px; background: #fff; }"
-            "QToolButton:hover { background: #f0f4ff; border-color: #99b; }"
-        )
         self.btn_attach.clicked.connect(self._pick_attachments)
         self.btn_attach.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_attach.customContextMenuRequested.connect(
@@ -133,37 +130,14 @@ class ChatWidget(QFrame):
         )
 
         self._attach_badge = QLabel("")
-        self._attach_badge.setStyleSheet("color:#666;font-size:11px;")
         self._attach_badge.setMaximumWidth(56)
 
-        self.btn_send = HoverAnimPushButton(
-            "전송",
-            shadow_color=QColor(0, 123, 255, 95),
-            hover_blur=22,
-        )
-        self.btn_send.setStyleSheet(
-            "QPushButton { padding: 8px 15px; background: #007bff; color: white; "
-            "border-radius: 5px; font-weight: bold; border: none; }"
-            "QPushButton:hover { background: #1a8cff; }"
-            "QPushButton:pressed { background: #0069d9; }"
-            "QPushButton:disabled { background: #6c757d; color: #e9ecef; }"
-        )
+        self.btn_send = HoverAnimPushButton("전송", hover_blur=22)
         self.btn_send.clicked.connect(self.send_message)
 
-        self.btn_interrupt = HoverAnimPushButton(
-            "중단",
-            shadow_color=QColor(220, 53, 69, 95),
-            hover_blur=22,
-        )
+        self.btn_interrupt = HoverAnimPushButton("중단", hover_blur=22)
         self.btn_interrupt.setToolTip(
             "응답 생성·타이핑·음성 재생을 즉시 멈춥니다."
-        )
-        self.btn_interrupt.setStyleSheet(
-            "QPushButton { padding: 8px 12px; background: #dc3545; color: white; "
-            "border-radius: 5px; font-weight: bold; border: none; }"
-            "QPushButton:hover { background: #e4606d; }"
-            "QPushButton:pressed { background: #bd2130; }"
-            "QPushButton:disabled { background: #adb5bd; color: #f8f9fa; }"
         )
         self.btn_interrupt.clicked.connect(self.request_interrupt)
         self.btn_interrupt.setEnabled(False)
@@ -191,6 +165,126 @@ class ChatWidget(QFrame):
             w.setAcceptDrops(True)
             w.installEventFilter(self)
             self._drop_watch_targets.append(w)
+
+        self.apply_dark_mode_from_parent_config()
+
+    def apply_dark_mode_from_parent_config(self) -> None:
+        dark = True
+        if self.parent is not None and hasattr(self.parent, "config"):
+            dark = bool(self.parent.config.get("ui", {}).get("dark_mode", True))
+        self.apply_dark_mode(dark)
+
+    def _set_push_shadow(self, btn: HoverAnimPushButton, color: QColor) -> None:
+        eff = btn.graphicsEffect()
+        if isinstance(eff, QGraphicsDropShadowEffect):
+            eff.setColor(color)
+
+    def apply_dark_mode(self, dark: bool) -> None:
+        self._dark_mode = bool(dark)
+        if self._dark_mode:
+            self._c_body = "#cdd6f4"
+            self._c_user = "#89b4fa"
+            self._c_assist = "#f5c2e7"
+            self._c_muted = "#7f849c"
+            self._c_err = "#f38ba8"
+            self.setStyleSheet(
+                """
+                QFrame#vmateChatFrame {
+                    background-color: rgba(24, 24, 37, 0.94);
+                    border: 1px solid rgba(69, 71, 90, 0.98);
+                    border-radius: 14px;
+                }
+                QScrollArea { background: transparent; border: none; }
+                QScrollBar:vertical {
+                    background: #181825;
+                    width: 8px;
+                    margin: 2px;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #45475a;
+                    min-height: 28px;
+                    border-radius: 4px;
+                }
+                """
+            )
+            self.input_field.setStyleSheet(
+                "padding: 8px 12px; border-radius: 8px; border: 1px solid #45475a; "
+                "background: #1e1e2e; color: #cdd6f4; selection-background-color: #45475a;"
+            )
+            self.btn_attach.setStyleSheet(
+                "QToolButton { border: 1px solid #45475a; border-radius: 8px; background: #313244; }"
+                "QToolButton:hover { background: #45475a; border-color: #585b70; }"
+            )
+            self.btn_send.setStyleSheet(
+                "QPushButton { padding: 8px 16px; background: #89b4fa; color: #11111b; "
+                "border-radius: 8px; font-weight: 600; border: 1px solid #89b4fa; }"
+                "QPushButton:hover { background: #b4befe; border-color: #b4befe; }"
+                "QPushButton:pressed { background: #7287fd; border-color: #7287fd; color: #11111b; }"
+                "QPushButton:disabled { background: #45475a; color: #7f849c; border-color: #45475a; }"
+            )
+            self.btn_interrupt.setStyleSheet(
+                "QPushButton { padding: 8px 12px; background: #313244; color: #f38ba8; "
+                "border-radius: 8px; font-weight: 600; border: 1px solid #45475a; }"
+                "QPushButton:hover { background: #45475a; color: #eba0ac; }"
+                "QPushButton:pressed { background: #1e1e2e; }"
+                "QPushButton:disabled { background: #181825; color: #585b70; border-color: #313244; }"
+            )
+            self._set_push_shadow(self.btn_send, QColor(137, 180, 250, 90))
+            self._set_push_shadow(self.btn_interrupt, QColor(243, 139, 168, 95))
+        else:
+            self._c_body = "#222222"
+            self._c_user = "#0056b3"
+            self._c_assist = "#d63384"
+            self._c_muted = "#666666"
+            self._c_err = "#cc0000"
+            self.setStyleSheet(
+                """
+                QFrame#vmateChatFrame {
+                    background-color: rgba(255, 255, 255, 220);
+                    border-radius: 10px;
+                }
+                QScrollArea { background: transparent; border: none; }
+                QScrollBar:vertical {
+                    background: #e8e8e8;
+                    width: 8px;
+                    margin: 2px;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #b0b0b0;
+                    min-height: 28px;
+                    border-radius: 4px;
+                }
+                """
+            )
+            self.input_field.setStyleSheet(
+                "padding: 8px; border-radius: 5px; border: 1px solid #ccc; "
+                "background: white; color: #222; selection-background-color: #b3d7ff;"
+            )
+            self.btn_attach.setStyleSheet(
+                "QToolButton { border: 1px solid #ccc; border-radius: 5px; background: #fff; }"
+                "QToolButton:hover { background: #f0f4ff; border-color: #99b; }"
+            )
+            self.btn_send.setStyleSheet(
+                "QPushButton { padding: 8px 15px; background: #007bff; color: white; "
+                "border-radius: 5px; font-weight: bold; border: none; }"
+                "QPushButton:hover { background: #1a8cff; }"
+                "QPushButton:pressed { background: #0069d9; }"
+                "QPushButton:disabled { background: #6c757d; color: #e9ecef; }"
+            )
+            self.btn_interrupt.setStyleSheet(
+                "QPushButton { padding: 8px 12px; background: #dc3545; color: white; "
+                "border-radius: 5px; font-weight: bold; border: none; }"
+                "QPushButton:hover { background: #e4606d; }"
+                "QPushButton:pressed { background: #bd2130; }"
+                "QPushButton:disabled { background: #adb5bd; color: #f8f9fa; }"
+            )
+            self._set_push_shadow(self.btn_send, QColor(0, 123, 255, 95))
+            self._set_push_shadow(self.btn_interrupt, QColor(220, 53, 69, 95))
+        self._attach_badge.setStyleSheet(
+            f"color:{self._c_muted};font-size:11px;"
+        )
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched in self._drop_watch_targets:
@@ -340,14 +434,18 @@ class ChatWidget(QFrame):
     def _assistant_display_name(self) -> str:
         if not self.parent or not hasattr(self.parent, "config"):
             return "DAON"
-        raw = str(
-            self.parent.config.get("ui", {}).get("chat_assistant_name", "") or ""
-        ).strip()
-        return raw if raw else "DAON"
+        cfg = self.parent.config
+        folder = str(cfg.get("live2d", {}).get("model_folder", "") or "").strip()
+        legacy = str(cfg.get("ui", {}).get("chat_assistant_name", "") or "").strip()
+        return get_assistant_display_name(
+            repo_root(),
+            folder,
+            legacy_chat_assistant_name=legacy or None,
+        )
 
     def _assistant_name_span_html(self) -> str:
         n = html.escape(self._assistant_display_name())
-        return f'<span style="color:#d63384;font-weight:bold;">{n}:</span> '
+        return f'<span style="color:{self._c_assist};font-weight:bold;">{n}:</span> '
 
     def _apply_input_placeholder_for_assistant(self) -> None:
         n = self._assistant_display_name()
@@ -413,7 +511,7 @@ class ChatWidget(QFrame):
         body = html.escape(plain).replace("\n", "<br/>")
         self._pending_reply_label.setText(
             self._assistant_name_span_html()
-            + f'<span style="color:#222;">{body}</span>'
+            + f'<span style="color:{self._c_body};">{body}</span>'
         )
 
     def _release_stream_segments_if_caught_up(self) -> None:
@@ -526,7 +624,7 @@ class ChatWidget(QFrame):
         if self._pending_reply_label:
             self._pending_reply_label.setText(
                 self._assistant_name_span_html()
-                + f'<span style="color:#222;">{body}</span>'
+                + f'<span style="color:{self._c_body};">{body}</span>'
             )
         self._pending_reply_label = None
         self._stream_motion_once = False
@@ -546,9 +644,47 @@ class ChatWidget(QFrame):
             th.deleteLater()
         self._sync_interrupt_button_state()
 
+    def is_pipeline_busy(self) -> bool:
+        if not self.input_field.isEnabled():
+            return True
+        if self._type_timer.isActive():
+            return True
+        if self._chat_thread is not None and self._chat_thread.isRunning():
+            return True
+        return False
+
+    def clear_conversation_ui(self) -> None:
+        while self.history_layout.count():
+            item = self.history_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def load_history_messages(self, messages: list[dict[str, str]]) -> None:
+        self.clear_conversation_ui()
+        aname = self._assistant_display_name()
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "").strip()
+            content = (m.get("content") or "").strip()
+            if not content:
+                continue
+            body = html.escape(content).replace("\n", "<br/>")
+            if role == "user":
+                self.add_message("User", body, is_user=True)
+            elif role == "assistant":
+                self.add_message(aname, body, is_user=False)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
     def add_message(self, sender, text, is_user=True):
-        color = "#0056b3" if is_user else "#d63384"
-        msg_label = QLabel(f'<span style="color:{color}; font-weight:bold;">{sender}:</span> {text}')
+        esc = html.escape(sender)
+        name_c = self._c_user if is_user else self._c_assist
+        msg_label = QLabel(
+            f'<span style="color:{name_c};font-weight:bold;">{esc}:</span> '
+            f'<span style="color:{self._c_body};">{text}</span>'
+        )
+        msg_label.setTextFormat(Qt.TextFormat.RichText)
         msg_label.setWordWrap(True)
         msg_label.setStyleSheet("background: transparent;")
         self.history_layout.addWidget(msg_label)
@@ -644,7 +780,7 @@ class ChatWidget(QFrame):
         dots = "." * (self._wait_phase + 1)
         self._pending_reply_label.setText(
             self._assistant_name_span_html()
-            + f'<span style="color:#888;font-style:italic;">답변 생성 중{dots}</span>'
+            + f'<span style="color:{self._c_muted};font-style:italic;">답변 생성 중{dots}</span>'
         )
         self._scroll_to_bottom()
 
@@ -656,7 +792,7 @@ class ChatWidget(QFrame):
             body = html.escape(show).replace("\n", "<br/>")
             self._pending_reply_label.setText(
                 self._assistant_name_span_html()
-                + f'<span style="color:#222;">{body}</span>'
+                + f'<span style="color:{self._c_body};">{body}</span>'
             )
             self._pending_reply_label = None
         self._scroll_to_bottom()
@@ -779,7 +915,7 @@ class ChatWidget(QFrame):
         if self._pending_reply_label:
             self._pending_reply_label.setText(
                 self._assistant_name_span_html()
-                + f'<span style="color:#c00;">[오류] {esc}</span>'
+                + f'<span style="color:{self._c_err};">[오류] {esc}</span>'
             )
         self._pending_reply_label = None
         if hasattr(self, "_streaming_plain"):
@@ -824,7 +960,7 @@ class ChatWidget(QFrame):
         if pending:
             esc_names = ", ".join(html.escape(a.original_name) for a in pending)
             display += (
-                f"<br/><span style=\"color:#888;font-size:11px;\">첨부: {esc_names}</span>"
+                f"<br/><span style=\"color:{self._c_muted};font-size:11px;\">첨부: {esc_names}</span>"
             )
 
         self.add_message("User", display, is_user=True)

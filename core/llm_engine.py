@@ -70,31 +70,47 @@ class LLMEngine:
         self._full_config = dict(config) if config else {}
 
     def _effective_system_prompt(self) -> str:
-        base = (self.system_prompt or "").strip()
         fc = self._full_config or {}
         llm_sec = fc.get("llm") or {}
         live = fc.get("live2d") or {}
-        if not bool(llm_sec.get("use_emotion_tags", True)):
-            body = base
-        elif not bool(live.get("auto_emotion_from_assistant", True)):
-            body = base
-        else:
+        base = (self.system_prompt or "").strip()
+        folder = str(live.get("model_folder", "") or "").strip()
+
+        emotion_extra = ""
+        if bool(llm_sec.get("use_emotion_tags", True)) and bool(
+            live.get("auto_emotion_from_assistant", True)
+        ):
             from core.live2d_emotion_tags import (
                 build_emo_map_from_profile,
                 emotion_tags_prompt_instruction,
             )
             from core.model_profile import profile_for_folder
 
-            folder = str(live.get("model_folder", "") or "").strip()
             prof = profile_for_folder(folder)
             em = build_emo_map_from_profile(prof)
-            extra = emotion_tags_prompt_instruction(em)
-            if not extra:
-                body = base
-            elif base:
-                body = f"{base}{extra}"
-            else:
-                body = extra.lstrip()
+            emotion_extra = emotion_tags_prompt_instruction(em) or ""
+
+        model_extra = ""
+        if folder:
+            from core.live2d_character_settings import (
+                compose_character_prompt_block,
+                load_character_settings,
+            )
+            from core.model_profile import repo_root
+
+            ch = load_character_settings(repo_root(), folder)
+            model_extra = compose_character_prompt_block(folder, ch)
+
+        # 순서: 전역 프롬프트 → 감정 태그(기술) → 캐릭터 계약(맨 뒤 = 페르소나 우선·준수 강조)
+        parts: list[str] = []
+        if base:
+            parts.append(base)
+        if emotion_extra:
+            parts.append(emotion_extra.strip())
+        if model_extra:
+            parts.append(model_extra)
+
+        body = "\n\n".join(parts) if parts else ""
 
         core = CORE_SYSTEM_PROMPT_PREFIX.rstrip()
         rest = (body or "").strip()

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from config.config_loader import save_config
 from config.llm_defaults import default_llm_api_url_for_provider
+from core.model_profile import repo_root
 from mcp_extension import DEFAULT_MCP_SERVERS_CONFIG_FILE
 from ui.hover_button import HoverAnimPushButton
 
@@ -381,15 +382,19 @@ class SettingsDialog(QDialog):
             "응답에 따른 표정 반영 (Auto Emotion)"
         )
         fl.addRow(self.chk_auto_emotion)
+        btn_char_prompt = HoverAnimPushButton("이 모델 전용 캐릭터 프롬프트…")
+        btn_char_prompt.setToolTip(
+            "모델 폴더에 daon_(폴더이름)_settings.json 으로 저장되며, "
+            "채팅 시 LLM 시스템 프롬프트에 합쳐집니다."
+        )
+        btn_char_prompt.clicked.connect(self._open_live2d_character_prompt_dialog)
+        fl.addRow(btn_char_prompt)
         self.chk_mouse_tracking = QCheckBox("마우스 시선 추적 (Mouse Tracking)")
         fl.addRow(self.chk_mouse_tracking)
         layout.addWidget(g_live)
 
         g_win = QGroupBox("창 (UI)")
         fw = QFormLayout(g_win)
-        self.edit_chat_assistant_name = QLineEdit()
-        self.edit_chat_assistant_name.setPlaceholderText("채팅 말풍선에 표시")
-        fw.addRow("채팅 주체 이름", self.edit_chat_assistant_name)
         self.spin_w = QSpinBox()
         self.spin_w.setRange(480, 3840)
         self.spin_h = QSpinBox()
@@ -407,6 +412,8 @@ class SettingsDialog(QDialog):
         self.spin_pet_h = QSpinBox()
         self.spin_pet_h.setRange(200, 1600)
         fw.addRow(self.chk_top)
+        self.chk_dark_mode = QCheckBox("다크 모드 (채팅·사이드바·상단 바)")
+        fw.addRow(self.chk_dark_mode)
         fw.addRow("타이핑 간격", self.spin_typing_ms)
         fw.addRow("타이핑 글자/틱", self.spin_typing_chars)
         fw.addRow("캐릭터 모드 창 너비", self.spin_pet_w)
@@ -716,12 +723,10 @@ class SettingsDialog(QDialog):
             bool(live.get("auto_emotion_from_assistant", True))
         )
         self.chk_mouse_tracking.setChecked(bool(ui.get("mouse_tracking", True)))
-        self.edit_chat_assistant_name.setText(
-            str(ui.get("chat_assistant_name", "DAON") or "DAON")
-        )
         self.spin_w.setValue(int(ui.get("window_width", 1280)))
         self.spin_h.setValue(int(ui.get("window_height", 720)))
         self.chk_top.setChecked(bool(ui.get("always_on_top", False)))
+        self.chk_dark_mode.setChecked(bool(ui.get("dark_mode", True)))
         self.spin_typing_ms.setValue(
             max(4, min(200, int(ui.get("typing_interval_ms", 26))))
         )
@@ -801,6 +806,24 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self.combo_folder.setCurrentIndex(idx)
 
+    def _open_live2d_character_prompt_dialog(self) -> None:
+        folder = self.combo_folder.currentText().strip()
+        if not folder:
+            QMessageBox.warning(self, "Live2D", "모델 폴더를 먼저 선택하세요.")
+            return
+        base = os.path.join(repo_root(), "assets", "live2d-models", folder)
+        if not os.path.isdir(base):
+            QMessageBox.warning(
+                self,
+                "Live2D",
+                f"모델 폴더가 없습니다.\n{base}",
+            )
+            return
+        from ui.live2d_character_prompt_dialog import Live2DCharacterPromptDialog
+
+        dlg = Live2DCharacterPromptDialog(repo_root(), folder, self)
+        dlg.exec()
+
     def _import_model_folder(self):
         source = QFileDialog.getExistingDirectory(self, "Live2D 모델 폴더 선택")
         if not source:
@@ -845,12 +868,12 @@ class SettingsDialog(QDialog):
         c["live2d"]["scale"] = float(self.spin_scale.value())
         c["live2d"]["auto_emotion_from_assistant"] = self.chk_auto_emotion.isChecked()
         c["ui"]["mouse_tracking"] = self.chk_mouse_tracking.isChecked()
-        _aname = self.edit_chat_assistant_name.text().strip()
-        c["ui"]["chat_assistant_name"] = _aname if _aname else "DAON"
+        c["ui"].pop("chat_assistant_name", None)
         c["ui"]["window_width"] = int(self.spin_w.value())
         c["ui"]["window_height"] = int(self.spin_h.value())
         c["ui"].pop("transparent_background", None)
         c["ui"]["always_on_top"] = self.chk_top.isChecked()
+        c["ui"]["dark_mode"] = self.chk_dark_mode.isChecked()
         c["ui"]["typing_interval_ms"] = max(
             4, min(200, int(self.spin_typing_ms.value()))
         )
