@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import sys
 from typing import Optional
@@ -62,6 +63,8 @@ from ui.screen_share import (
     pixmap_to_llm_attachment,
 )
 from ui.settings_dialog import SettingsDialog
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -964,9 +967,10 @@ class MainWindow(QMainWindow):
         target_model = next((m for m in models if m['folder_name'] == folder_name), None)
         if not target_model and models:
             target_model = models[0]
-            print(
-                f"[Live2D] 설정 폴더 '{folder_name}' 없음, "
-                f"'{target_model['folder_name']}' 로 대체합니다."
+            logger.warning(
+                "설정 폴더 '%s' 없음, '%s' 로 대체합니다.",
+                folder_name,
+                target_model["folder_name"],
             )
         if target_model:
             # emotionMap·프로필은 실제 로드된 모델 폴더와 맞춤(폴백 시 설정명과 불일치 방지)
@@ -977,9 +981,9 @@ class MainWindow(QMainWindow):
                 folder_name=loaded_folder or folder_name,
             )
         else:
-            print(
-                "[Live2D] 사용 가능한 모델이 없습니다. "
-                "설정에서 폴더를 불러오거나 assets/live2d-models 에 모델을 넣으세요."
+            logger.warning(
+                "사용 가능한 모델이 없습니다. 설정에서 폴더를 불러오거나 "
+                "assets/live2d-models 에 모델을 넣으세요."
             )
         if hasattr(self, "vmate_manager"):
             self.vmate_manager.reload_from_config(self.config)

@@ -3,26 +3,6 @@
 # Live2D 뷰 상단 툴바 높이(MainWindow 레이아웃과 맞출 것)
 LIVE2D_TOP_BAR_HEIGHT_PX = 52
 
-# 캐릭터 모드만(투명 무테) 창 위에서 기본 QMenu가 비어 보이는 경우 대비
-PET_DESKTOP_CONTEXT_MENU_QSS = """
-QMenu#petDesktopContextMenu {
-    background-color: #1e1e2e;
-    border: 1px solid #45475a;
-    border-radius: 8px;
-    padding: 6px 0px;
-}
-QMenu#petDesktopContextMenu::item {
-    background-color: transparent;
-    color: #cdd6f4;
-    padding: 10px 28px 10px 18px;
-    min-width: 170px;
-}
-QMenu#petDesktopContextMenu::item:selected {
-    background-color: #45475a;
-    color: #89b4fa;
-}
-"""
-
 # Live2D 우클릭(표정·모션) 메뉴: 검정 텍스트 + 밝은 배경
 LIVE2D_CONTEXT_MENU_QSS = """
 QMenu#live2dContextMenu {

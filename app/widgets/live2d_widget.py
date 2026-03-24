@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import logging
 import math
 import os
 import shutil
@@ -24,6 +25,8 @@ import live2d.v3 as live2d
 
 # 프로세스당 한 번만 (미리보기용 두 번째 QOpenGLWidget이 init 을 다시 호출하면 전역 상태가 깨질 수 있음)
 _live2d_library_inited = False
+
+logger = logging.getLogger(__name__)
 
 from app.styles import LIVE2D_CONTEXT_MENU_QSS, LIVE2D_CONTEXT_SUBMENU_QSS
 from app.windows.identity import is_app_main_window
@@ -260,7 +263,7 @@ class Live2DWidget(QOpenGLWidget):
         """OpenGL 컨텍스트가 유효할 때만 호출"""
         path = os.path.abspath(self.model_path)
         if not os.path.exists(path):
-            print(f"[Live2D] 모델 파일을 찾을 수 없습니다: {path}")
+            logger.warning("모델 파일을 찾을 수 없습니다: %s", path)
             return
         try:
             self.makeCurrent()
@@ -273,9 +276,9 @@ class Live2DWidget(QOpenGLWidget):
             self.model.LoadModelJson(path)
             self.model.Resize(max(self.width(), 1), max(self.height(), 1))
             self._sync_model_scale_offset()
-            print(f"[Live2D] 네이티브 모델 로드 성공: {path}")
+            logger.debug("네이티브 모델 로드 성공: %s", path)
         except Exception as e:
-            print(f"[Live2D] 모델 로드 중 오류 발생: {e}")
+            logger.error("모델 로드 중 오류: %s", e)
         finally:
             self.doneCurrent()
 
@@ -334,7 +337,7 @@ class Live2DWidget(QOpenGLWidget):
                         self._live2d_folder_name = seg
                     break
         if not path or not os.path.exists(path):
-            print(f"[Live2D] 모델 경로가 없거나 파일이 없습니다: {path}")
+            logger.warning("모델 경로가 없거나 파일이 없습니다: %s", path)
             self.update()
             return
         if self._gl_ready and self.isValid():
@@ -403,8 +406,9 @@ class Live2DWidget(QOpenGLWidget):
         g, idx = tap_motion_for_folder(self._live2d_folder_name)
         self.start_motion(g, idx)
 
-    def _style_live2d_context_menu(self, menu: QMenu) -> None:
-        menu.setStyleSheet(LIVE2D_CONTEXT_MENU_QSS)
+    def _apply_menu_chrome(self, menu: QMenu, qss: str) -> None:
+        """Live2D 컨텍스트 메뉴·서브메뉴 공통: 투명 합성 회피 + 밝은 팔레트."""
+        menu.setStyleSheet(qss)
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         menu.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         menu.setAutoFillBackground(True)
@@ -415,17 +419,11 @@ class Live2DWidget(QOpenGLWidget):
         pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
         menu.setPalette(pal)
 
+    def _style_live2d_context_menu(self, menu: QMenu) -> None:
+        self._apply_menu_chrome(menu, LIVE2D_CONTEXT_MENU_QSS)
+
     def _style_live2d_submenu(self, sm: QMenu) -> None:
-        sm.setStyleSheet(LIVE2D_CONTEXT_SUBMENU_QSS)
-        sm.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        sm.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-        sm.setAutoFillBackground(True)
-        pal = sm.palette()
-        pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
-        pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-        pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
-        pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
-        sm.setPalette(pal)
+        self._apply_menu_chrome(sm, LIVE2D_CONTEXT_SUBMENU_QSS)
 
     def _expression_ids_for_menu(self) -> list[str]:
         if not self.model:
