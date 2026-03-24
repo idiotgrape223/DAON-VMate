@@ -40,9 +40,9 @@ def mcp_emotion_allowlist_ko_sentence(full_config: Optional[dict[str, Any]]) -> 
             "[당황] 등 한글 괄호 태그는 금지입니다."
         )
     from core.live2d_emotion_tags import build_emo_map_from_profile
-    from core.model_profile import profile_for_folder
+    from core.model_profile import effective_profile_for_folder
 
-    em = build_emo_map_from_profile(profile_for_folder(folder))
+    em = build_emo_map_from_profile(effective_profile_for_folder(folder))
     if not em:
         return (
             "[답변 형식] 감정 태그는 Core 에 명시된 영문 키만 사용하세요. "

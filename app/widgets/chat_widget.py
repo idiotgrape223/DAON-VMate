@@ -507,28 +507,28 @@ class ChatWidget(QFrame):
         if not self._type_timer.isActive():
             self._type_timer.start()
 
-    def _assistant_bubble_body_html(self, raw_text: str) -> str:
+    def _assistant_bubble_label_html(self, raw_text: str) -> str:
+        """사고 모드면 이름은 `### 답변` 본문 앞에만 붙이고, 그 외에는 말풍선 맨 앞에 붙입니다."""
         cfg = getattr(self.parent, "config", None) or {}
+        name_sp = self._assistant_name_span_html()
         styled = assistant_thinking_display_body_html(
             raw_text,
             cfg,
             think_color=self._c_muted,
             body_color=self._c_body,
+            name_span_before_answer=name_sp,
         )
         if styled is not None:
             return styled
         show = assistant_history_plain(raw_text, cfg)
         esc = html.escape(show).replace("\n", "<br/>")
-        return f'<span style="color:{self._c_body};">{esc}</span>'
+        return name_sp + f'<span style="color:{self._c_body};">{esc}</span>'
 
     def _update_pending_label_html(self) -> None:
         if not self._pending_reply_label:
             return
         plain = getattr(self, "_streaming_plain", "") or ""
-        body = self._assistant_bubble_body_html(plain)
-        self._pending_reply_label.setText(
-            self._assistant_name_span_html() + body
-        )
+        self._pending_reply_label.setText(self._assistant_bubble_label_html(plain))
 
     def _release_stream_segments_if_caught_up(self) -> None:
         """스트리밍 TTS: 화면에 해당 구간 글자가 다 나온 뒤에만 재생 스레드가 진행하도록."""
@@ -634,13 +634,12 @@ class ChatWidget(QFrame):
         self._chat_thread = None
         plain = getattr(self, "_streaming_plain", "") or ""
         if plain.strip():
-            body = html.escape(plain.rstrip() + "\n[중단됨]").replace("\n", "<br/>")
+            interrupt_plain = plain.rstrip() + "\n[중단됨]"
         else:
-            body = html.escape("[중단됨]").replace("\n", "<br/>")
+            interrupt_plain = "[중단됨]"
         if self._pending_reply_label:
             self._pending_reply_label.setText(
-                self._assistant_name_span_html()
-                + f'<span style="color:{self._c_body};">{body}</span>'
+                self._assistant_bubble_label_html(interrupt_plain)
             )
         self._pending_reply_label = None
         self._stream_motion_once = False
@@ -691,20 +690,44 @@ class ChatWidget(QFrame):
                 self.add_message("User", body, is_user=True)
             elif role == "assistant":
                 cfg = getattr(self.parent, "config", None) or {}
+                name_sp = self._assistant_name_span_html()
                 styled = assistant_thinking_display_body_html(
                     content,
                     cfg,
                     think_color=self._c_muted,
                     body_color=self._c_body,
+                    name_span_before_answer=name_sp,
                 )
                 if styled is not None:
-                    body = styled
+                    self.add_message(
+                        "",
+                        styled,
+                        is_user=False,
+                        assistant_row_html_complete=True,
+                    )
                 else:
                     body = html.escape(content).replace("\n", "<br/>")
-                self.add_message(aname, body, is_user=False)
+                    self.add_message(aname, body, is_user=False)
         QTimer.singleShot(0, self._scroll_to_bottom)
 
-    def add_message(self, sender, text, is_user=True):
+    def add_message(
+        self,
+        sender,
+        text,
+        is_user=True,
+        *,
+        assistant_row_html_complete: bool = False,
+    ):
+        if assistant_row_html_complete:
+            msg_label = QLabel(text)
+            msg_label.setTextFormat(Qt.TextFormat.RichText)
+            msg_label.setWordWrap(True)
+            msg_label.setStyleSheet("background: transparent;")
+            self.history_layout.addWidget(msg_label)
+            self.scroll.verticalScrollBar().setValue(
+                self.scroll.verticalScrollBar().maximum()
+            )
+            return
         esc = html.escape(sender)
         name_c = self._c_user if is_user else self._c_assist
         msg_label = QLabel(
@@ -814,9 +837,8 @@ class ChatWidget(QFrame):
     def _finish_pending_assistant(self, text: str) -> None:
         self._wait_timer.stop()
         if self._pending_reply_label:
-            body = self._assistant_bubble_body_html(text or "")
             self._pending_reply_label.setText(
-                self._assistant_name_span_html() + body
+                self._assistant_bubble_label_html(text or "")
             )
             self._pending_reply_label = None
         self._scroll_to_bottom()
@@ -1025,7 +1047,7 @@ class ChatWidget(QFrame):
             self._stream_invoke_gen += 1
             stream_gen = self._stream_invoke_gen
             self._chat_thread = _StreamChatWorkerThread(
-                self.parent.vtuber_manager,
+                self.parent.vmate_manager,
                 text,
                 self,
                 self._stop_pipeline,
@@ -1045,7 +1067,7 @@ class ChatWidget(QFrame):
             self._chat_thread.start()
         else:
             self._chat_thread = _LLMChatWorkerThread(
-                self.parent.vtuber_manager,
+                self.parent.vmate_manager,
                 text,
                 self._stop_pipeline,
                 pending,

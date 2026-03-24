@@ -93,6 +93,11 @@ def _resolve_model3_path(folder_name: str) -> Optional[str]:
     return matches[0]
 
 
+def model3_json_path_for_folder(folder_name: str) -> Optional[str]:
+    """미리보기·검증용: 모델 폴더에 대응하는 .model3.json 절대 경로."""
+    return _resolve_model3_path(folder_name)
+
+
 def load_motion_catalog_for_folder(folder_name: str) -> dict[str, int]:
     """
     model3.json 의 FileReferences.Motions 에서 그룹명 -> 해당 그룹 모션 개수.
@@ -122,6 +127,74 @@ def load_motion_catalog_for_folder(folder_name: str) -> dict[str, int]:
             if isinstance(v, list):
                 out[str(k)] = len(v)
     _catalog_cache[cache_key] = (mtime, out)
+    return out
+
+
+def load_expression_catalog_for_folder(folder_name: str) -> list[tuple[int, str]]:
+    """model3.json FileReferences.Expressions → (인덱스, Name) 목록 (표정 선택 UI용)."""
+    path = _resolve_model3_path(folder_name)
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    exprs = (data.get("FileReferences") or {}).get("Expressions")
+    out: list[tuple[int, str]] = []
+    if not isinstance(exprs, list):
+        return out
+    for i, item in enumerate(exprs):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("Name") or item.get("name")
+        label = str(name).strip() if name is not None else f"expr{i}"
+        out.append((i, label))
+    return out
+
+
+def effective_profile_for_folder(folder_name: str) -> Optional[dict[str, Any]]:
+    """
+    model_dict 프로필 + assets/.../daon_{folder}_expression_settings.json 오버레이.
+    오버레이에 emotionMap 키가 있으면 해당 dict로 표정 매핑을 통째로 교체합니다.
+    """
+    from core.live2d_expression_settings import (
+        load_expression_overlay,
+        normalize_emotion_map,
+    )
+
+    fn = (folder_name or "").strip()
+    if not fn:
+        return None
+    base = profile_for_folder(fn)
+    ov = load_expression_overlay(_REPO_ROOT, fn)
+    if not base:
+        if not ov:
+            return None
+        em: dict[str, int] = {}
+        if "emotionMap" in ov:
+            em = normalize_emotion_map(ov.get("emotionMap"))
+        eg = ov.get("emotionMotionGroup")
+        ig = ov.get("idleMotionGroupName")
+        if (
+            not em
+            and "emotionMotionGroup" not in ov
+            and "idleMotionGroupName" not in ov
+        ):
+            return None
+        return {
+            "name": fn,
+            "emotionMap": em,
+            "emotionMotionGroup": eg if isinstance(eg, str) else "",
+            "idleMotionGroupName": ig if isinstance(ig, str) else "Idle",
+        }
+    out = dict(base)
+    if "emotionMap" in ov:
+        out["emotionMap"] = normalize_emotion_map(ov.get("emotionMap"))
+    if "emotionMotionGroup" in ov and isinstance(ov.get("emotionMotionGroup"), str):
+        out["emotionMotionGroup"] = ov["emotionMotionGroup"]
+    if "idleMotionGroupName" in ov and isinstance(ov.get("idleMotionGroupName"), str):
+        out["idleMotionGroupName"] = ov["idleMotionGroupName"]
     return out
 
 
@@ -250,7 +323,7 @@ def emotion_motion_index(profile: Optional[dict[str, Any]], label: str) -> Optio
 
 
 def emotion_motion_for_folder(folder_name: str, label: str) -> Optional[int]:
-    return emotion_motion_index(profile_for_folder(folder_name), label)
+    return emotion_motion_index(effective_profile_for_folder(folder_name), label)
 
 
 def idle_motion_group(profile: Optional[dict[str, Any]]) -> str:
@@ -281,7 +354,7 @@ def play_emotion_motion(
     emotionMap + emotionMotionGroup 로 StartMotion.
     라벨이 맵에 없으면 neutral 인덱스로 폴백.
     """
-    prof = profile_for_folder(folder_name)
+    prof = effective_profile_for_folder(folder_name)
     key = (emotion_label or "neutral").strip().lower()
     idx = emotion_motion_index(prof, key)
     if idx is None:

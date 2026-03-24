@@ -52,7 +52,7 @@ from core.llm_attachments import LLMMediaAttachment
 from core.mcp_client import MCPClientService
 from core.model_profile import repo_root
 from core.tts_engine import TTSEngine
-from core.vtuber_manager import VTuberManager
+from core.vmate_manager import VMateManager
 from ui.screen_share import (
     WindowPickerDialog,
     grab_full_virtual_desktop,
@@ -74,13 +74,13 @@ class MainWindow(QMainWindow):
         self.config = load_config()
         self.mcp_client = MCPClientService(repo_root())
         self.mcp_client.apply_config(self.config)
-        self.vtuber_manager = VTuberManager(self.config)
-        self.vtuber_manager.set_mcp_client(self.mcp_client)
+        self.vmate_manager = VMateManager(self.config)
+        self.vmate_manager.set_mcp_client(self.mcp_client)
         self._persist_chat_requested.connect(
             self._persist_active_chat_session,
             Qt.ConnectionType.QueuedConnection,
         )
-        self.vtuber_manager.add_history_listener(self._schedule_persist_chat)
+        self.vmate_manager.add_history_listener(self._schedule_persist_chat)
         self._active_chat_session_id: str | None = None
         self._active_session_title: str = ""
         self._chat_sessions_bound_model: str | None = None
@@ -172,9 +172,8 @@ class MainWindow(QMainWindow):
         self.btn_desktop_pet = QPushButton("캐릭터 모드")
         self.btn_desktop_pet.setToolTip(
             "데스크톱 캐릭터 모드: 무테 창과 Live2D 알파(배경 투명) 합성. "
-            "왼쪽 클릭: 채팅 입력 줄 표시/같은 방식으로 한 번 더 누르면 닫힘(캐릭터 영역). "
-            "채팅 바의 빈 여백을 눌러도 닫힘. 드래그: 시점, Shift+드래그: 창 이동, 휠: 크기. "
-            "우클릭: 채팅 모드로 복귀. Esc: 입력창만 닫기."
+            "왼쪽 짧은 클릭: 탭 모션 + 플로팅 채팅 토글. 드래그: 시점, Shift+드래그: 창 이동, 휠: 크기. "
+            "우클릭: 표정·모션 메뉴(채팅 토글·채팅 모드 복귀 포함). Esc: 입력창만 닫기."
         )
         self.btn_desktop_pet.clicked.connect(self.enter_desktop_pet_mode)
 
@@ -588,7 +587,7 @@ class MainWindow(QMainWindow):
             mf,
             sid,
             self._active_session_title,
-            self.vtuber_manager.history_snapshot(),
+            self.vmate_manager.history_snapshot(),
         )
 
     def current_live2d_model_folder(self) -> str:
@@ -605,7 +604,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         self._active_chat_session_id = session_id
         self._active_session_title = title
-        self.vtuber_manager.set_chat_history(messages)
+        self.vmate_manager.set_chat_history(messages)
         self.chat_widget.load_history_messages(messages)
         write_last_active_session_id(
             repo_root(), self.current_live2d_model_folder(), session_id
@@ -699,7 +698,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     self._active_chat_session_id = None
                     self._active_session_title = ""
-                    self.vtuber_manager.clear_chat_history()
+                    self.vmate_manager.clear_chat_history()
                     self.chat_widget.clear_conversation_ui()
         self._chat_history_sidebar.refresh_list(
             select_id=self._active_chat_session_id
@@ -759,11 +758,11 @@ class MainWindow(QMainWindow):
         if (
             reload_chat
             and hasattr(self, "chat_widget")
-            and hasattr(self, "vtuber_manager")
+            and hasattr(self, "vmate_manager")
             and not self.chat_widget.is_pipeline_busy()
         ):
             self.chat_widget.load_history_messages(
-                self.vtuber_manager.history_snapshot()
+                self.vmate_manager.history_snapshot()
             )
 
     def _maybe_rebind_chat_sessions_for_model(self) -> None:
@@ -776,8 +775,8 @@ class MainWindow(QMainWindow):
     def apply_ui_from_config(self):
         if hasattr(self, "mcp_client"):
             self.mcp_client.apply_config(self.config)
-        if hasattr(self, "vtuber_manager"):
-            self.vtuber_manager.set_mcp_client(self.mcp_client)
+        if hasattr(self, "vmate_manager"):
+            self.vmate_manager.set_mcp_client(self.mcp_client)
         if hasattr(self, "chat_widget"):
             self.chat_widget.apply_assistant_display_settings()
         self._apply_dark_mode_from_config(reload_chat=True)
@@ -982,7 +981,7 @@ class MainWindow(QMainWindow):
                 "[Live2D] 사용 가능한 모델이 없습니다. "
                 "설정에서 폴더를 불러오거나 assets/live2d-models 에 모델을 넣으세요."
             )
-        if hasattr(self, "vtuber_manager"):
-            self.vtuber_manager.reload_from_config(self.config)
+        if hasattr(self, "vmate_manager"):
+            self.vmate_manager.reload_from_config(self.config)
         self._maybe_rebind_chat_sessions_for_model()
 

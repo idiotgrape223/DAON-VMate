@@ -130,9 +130,9 @@ def strip_assistant_tags_for_pipeline(
     folder = str(live.get("model_folder", "") or "").strip()
     if not folder:
         return text
-    from core.model_profile import profile_for_folder
+    from core.model_profile import effective_profile_for_folder
 
-    prof = profile_for_folder(folder)
+    prof = effective_profile_for_folder(folder)
     em = build_emo_map_from_profile(prof)
     if not em:
         return text
@@ -172,10 +172,12 @@ def assistant_thinking_display_body_html(
     *,
     think_color: str,
     body_color: str,
+    name_span_before_answer: Optional[str] = None,
 ) -> Optional[str]:
     """
     사고 모드이고 `### 사고` / `### 답변` 구조가 있으면 헤더는 숨기고,
     사고 본문은 기울임+think_color, 답변 본문은 body_color 로 RichText 조각을 반환.
+    `name_span_before_answer`가 있으면 답변 본문 직전에만 붙임(사고 블록 옆에는 이름 없음).
     해당 없으면 None (호출측에서 일반 단일 스팬 처리).
     """
     if not text or not full_config:
@@ -223,6 +225,8 @@ def assistant_thinking_display_body_html(
         if answer_body:
             if show_think:
                 chunks.append("<br/>")
+            if name_span_before_answer is not None:
+                chunks.append(name_span_before_answer)
             chunks.append(
                 f'<span style="color:{body_color};">{esc_br(answer_body)}</span>'
             )
@@ -238,6 +242,8 @@ def assistant_thinking_display_body_html(
         if answer_body:
             if prefix:
                 chunks.append("<br/>")
+            if name_span_before_answer is not None:
+                chunks.append(name_span_before_answer)
             chunks.append(
                 f'<span style="color:{body_color};">{esc_br(answer_body)}</span>'
             )
@@ -271,9 +277,9 @@ def assistant_history_plain(text: str, full_config: Optional[dict[str, Any]]) ->
     folder = str(live.get("model_folder", "") or "").strip()
     if not folder:
         return text
-    from core.model_profile import profile_for_folder
+    from core.model_profile import effective_profile_for_folder
 
-    prof = profile_for_folder(folder)
+    prof = effective_profile_for_folder(folder)
     em = build_emo_map_from_profile(prof)
     if not em:
         return text

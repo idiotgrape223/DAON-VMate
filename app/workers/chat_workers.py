@@ -15,7 +15,7 @@ from core.live2d_emotion_tags import (
     thinking_mode_answer_body_if_marked,
 )
 from core.text_stream_batch import TextBatchAccumulator
-from core.vtuber_manager import VTuberManager
+from core.vmate_manager import VMateManager
 
 class _StreamSyncState:
     __slots__ = ("cv", "results", "llm_done", "batches_total")
@@ -45,14 +45,14 @@ class _LLMChatWorkerThread(QThread):
 
     def __init__(
         self,
-        vtuber_manager: VTuberManager,
+        vmate_manager: VMateManager,
         text: str,
         stop_event: threading.Event,
         attachments: Optional[list[LLMMediaAttachment]] = None,
         parent=None,
     ):
         super().__init__(parent)
-        self._vm = vtuber_manager
+        self._vm = vmate_manager
         self._text = text
         self._attachments = list(attachments or [])
         self._stop_event = stop_event
@@ -88,7 +88,7 @@ class _StreamChatWorkerThread(QThread):
 
     def __init__(
         self,
-        vtuber_manager: VTuberManager,
+        vmate_manager: VMateManager,
         user_text: str,
         chat_widget: "ChatWidget",
         stop_event: threading.Event,
@@ -97,7 +97,7 @@ class _StreamChatWorkerThread(QThread):
         parent=None,
     ):
         super().__init__(parent)
-        self._vm = vtuber_manager
+        self._vm = vmate_manager
         self._user = (user_text or "").strip()
         self._attachments = list(attachments or [])
         self._history_user_line = format_user_text_for_history(

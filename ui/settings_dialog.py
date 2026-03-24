@@ -291,6 +291,7 @@ class SettingsDialog(QDialog):
     def __init__(self, main_window, parent=None):
         super().__init__(parent or main_window)
         self.main = main_window
+        self._live2d_expression_dialog: QDialog | None = None
         self.setWindowTitle("환경 설정")
         self.setMinimumSize(640, 560)
         self.resize(760, 640)
@@ -350,6 +351,20 @@ class SettingsDialog(QDialog):
         self._load_values()
         self._sync_llm_form_for_provider()
         self._sync_tts_form_for_provider()
+        self._sync_live2d_model_extra_button()
+
+    def _close_live2d_expression_if_any(self) -> None:
+        w = self._live2d_expression_dialog
+        if w is None:
+            return
+        try:
+            w.close()
+        except RuntimeError:
+            pass
+
+    def done(self, r: int) -> None:
+        self._close_live2d_expression_if_any()
+        super().done(r)
 
     def _cfg(self):
         return self.main.config
@@ -382,13 +397,21 @@ class SettingsDialog(QDialog):
             "응답에 따른 표정 반영 (Auto Emotion)"
         )
         fl.addRow(self.chk_auto_emotion)
-        btn_char_prompt = HoverAnimPushButton("이 모델 전용 캐릭터 프롬프트…")
+        btn_char_prompt = HoverAnimPushButton("캐릭터 프롬프트 설정")
         btn_char_prompt.setToolTip(
             "모델 폴더에 daon_(폴더이름)_settings.json 으로 저장되며, "
             "채팅 시 LLM 시스템 프롬프트에 합쳐집니다."
         )
         btn_char_prompt.clicked.connect(self._open_live2d_character_prompt_dialog)
         fl.addRow(btn_char_prompt)
+        self.btn_model_extra = HoverAnimPushButton("모델 추가 셋팅")
+        self.btn_model_extra.setToolTip(
+            "감정 태그([joy] 등)와 Live2D 표정 인덱스·모션 그룹을 이 모델 폴더에만 저장합니다 "
+            "(daon_(폴더)_expression_settings.json)."
+        )
+        self.btn_model_extra.clicked.connect(self._open_live2d_expression_settings_dialog)
+        fl.addRow(self.btn_model_extra)
+        self.combo_folder.currentTextChanged.connect(self._sync_live2d_model_extra_button)
         self.chk_mouse_tracking = QCheckBox("마우스 시선 추적 (Mouse Tracking)")
         fl.addRow(self.chk_mouse_tracking)
         layout.addWidget(g_live)
@@ -825,6 +848,14 @@ class SettingsDialog(QDialog):
         idx = self.combo_folder.findText(name)
         if idx >= 0:
             self.combo_folder.setCurrentIndex(idx)
+        self._sync_live2d_model_extra_button()
+
+    def _sync_live2d_model_extra_button(self) -> None:
+        if not hasattr(self, "btn_model_extra"):
+            return
+        folder = self.combo_folder.currentText().strip()
+        base = os.path.join(repo_root(), "assets", "live2d-models", folder)
+        self.btn_model_extra.setEnabled(bool(folder) and os.path.isdir(base))
 
     def _open_live2d_character_prompt_dialog(self) -> None:
         folder = self.combo_folder.currentText().strip()
@@ -843,6 +874,48 @@ class SettingsDialog(QDialog):
 
         dlg = Live2DCharacterPromptDialog(repo_root(), folder, self)
         dlg.exec()
+
+    def _open_live2d_expression_settings_dialog(self) -> None:
+        folder = self.combo_folder.currentText().strip()
+        if not folder:
+            QMessageBox.warning(self, "Live2D", "모델 폴더를 먼저 선택하세요.")
+            return
+        base = os.path.join(repo_root(), "assets", "live2d-models", folder)
+        if not os.path.isdir(base):
+            QMessageBox.warning(
+                self,
+                "Live2D",
+                f"모델 폴더가 없습니다.\n{base}",
+            )
+            return
+        from ui.live2d_expression_settings_dialog import Live2DExpressionSettingsDialog
+
+        old = self._live2d_expression_dialog
+        if old is not None:
+            try:
+                if old.isVisible() and getattr(old, "_folder", "") == folder:
+                    old.raise_()
+                    old.activateWindow()
+                    return
+                old.close()
+            except RuntimeError:
+                self._live2d_expression_dialog = None
+
+        mw = self.main
+        dlg = Live2DExpressionSettingsDialog(
+            folder, mw if mw is not None else None, style_parent=self
+        )
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        try:
+            g = self.frameGeometry()
+            fg = dlg.frameGeometry()
+            dlg.move(g.center() - fg.center())
+        except Exception:
+            pass
+        self._live2d_expression_dialog = dlg
+        dlg.exec()
+        self._live2d_expression_dialog = None
 
     def _import_model_folder(self):
         source = QFileDialog.getExistingDirectory(self, "Live2D 모델 폴더 선택")
@@ -974,6 +1047,6 @@ class SettingsDialog(QDialog):
         self.main.apply_ui_from_config()
         self._refresh_mcp_status_label()
         self.main.reload_live2d()
-        if hasattr(self.main, "vtuber_manager"):
-            self.main.vtuber_manager.reload_from_config(c)
+        if hasattr(self.main, "vmate_manager"):
+            self.main.vmate_manager.reload_from_config(c)
         self.accept()

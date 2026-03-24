@@ -24,7 +24,7 @@ def _assistant_content_for_history(assistant_full: str, fc: dict[str, Any]) -> s
     ).strip()
 
 
-class VTuberManager:
+class VMateManager:
     """
     LLM, TTS 등 코어 컴포넌트 관리. Ollama chat 히스토리 유지.
     """

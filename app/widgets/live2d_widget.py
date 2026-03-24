@@ -22,11 +22,14 @@ from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 import live2d.v3 as live2d
 
-from app.styles import PET_DESKTOP_CONTEXT_MENU_QSS
+# 프로세스당 한 번만 (미리보기용 두 번째 QOpenGLWidget이 init 을 다시 호출하면 전역 상태가 깨질 수 있음)
+_live2d_library_inited = False
+
+from app.styles import LIVE2D_CONTEXT_MENU_QSS, LIVE2D_CONTEXT_SUBMENU_QSS
 from app.windows.identity import is_app_main_window
 from core.emotion_apply_debug_log import log_emotion_apply_step
 from core.live2d_emotion_tags import build_emo_map_from_profile, extract_emotion_indices
-from core.model_profile import profile_for_folder, tap_motion_for_folder
+from core.model_profile import load_motion_catalog_for_folder, tap_motion_for_folder
 
 def live2d_gl_surface_format() -> QSurfaceFormat:
     """
@@ -57,11 +60,24 @@ class Live2DWidget(QOpenGLWidget):
     """
     웹 브라우저(WebEngine) 없이 파이썬 네이티브 OpenGL로 Live2D를 직접 렌더링하는 위젯
     """
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        wheel_zoom_without_main_window: bool = False,
+        embed_preview_controls: bool = False,
+    ):
         super().__init__(parent)
         self.model = None
         self.model_path = ""
         self.scale = 0.25
+        # 설정 미리보기 등: 메인 창 밖에서 휠 스케일·좌클릭 드래그 패닝(탭 모션 없음)
+        self._embed_preview_controls = bool(embed_preview_controls)
+        self._wheel_zoom_without_main_window = bool(
+            wheel_zoom_without_main_window
+        ) or self._embed_preview_controls
+        self._embed_skip_paint = False
         self._gl_ready = False
         self._transparent_clear = False
         self._pet_press_global: QPoint | None = None
@@ -77,7 +93,7 @@ class Live2DWidget(QOpenGLWidget):
         # 왼쪽 버튼: 짧은 클릭 vs 카메라 패닝 드래그 구분 (클릭 시 탭 모션)
         self._cam_click_start: tuple[float, float] | None = None
         self._cam_drag_moved = False
-        self._CAM_TAP_DRAG_THRESHOLD_PX = 8.0
+        self._CAM_TAP_DRAG_THRESHOLD_PX = 12.0
         self._live2d_folder_name = ""
         self._last_applied_expression_index: int | None = None
 
@@ -227,7 +243,10 @@ class Live2DWidget(QOpenGLWidget):
         self._safe_set_param("ParamBodyAngleY", ly * 8.0)
 
     def initializeGL(self):
-        live2d.init()
+        global _live2d_library_inited
+        if not _live2d_library_inited:
+            live2d.init()
+            _live2d_library_inited = True
         live2d.glInit()
         ctx = self.context()
         if ctx is not None:
@@ -324,10 +343,18 @@ class Live2DWidget(QOpenGLWidget):
             self.update()
 
     def resizeGL(self, w, h):
+        if self._embed_skip_paint:
+            return
         if self.model and w > 0 and h > 0:
             self.model.Resize(w, h)
 
     def paintGL(self):
+        if self._embed_skip_paint:
+            f = self._gl_funcs
+            if f is not None:
+                f.glDisable(self._GL_BLEND)
+            live2d.clearBuffer(0.12, 0.12, 0.14, 1.0)
+            return
         f = self._gl_funcs
         if self._transparent_clear:
             if f is not None:
@@ -352,15 +379,202 @@ class Live2DWidget(QOpenGLWidget):
     def start_motion(self, motion_group, index=0):
         if not self.model:
             return
+        ctx = False
         try:
-            self.model.StartMotion(motion_group, index, live2d.MotionPriority.FORCE)
+            ctx = bool(self._gl_ready) and self.isValid()
         except Exception:
             pass
+        try:
+            if ctx:
+                self.makeCurrent()
+            try:
+                self.model.StartMotion(
+                    motion_group, index, live2d.MotionPriority.FORCE
+                )
+            finally:
+                if ctx:
+                    self.doneCurrent()
+        except Exception:
+            pass
+        self.update()
 
     def play_tap_interaction(self) -> None:
         """model_dict.json + 현재 model_folder 기준 탭/반응 모션."""
         g, idx = tap_motion_for_folder(self._live2d_folder_name)
         self.start_motion(g, idx)
+
+    def _style_live2d_context_menu(self, menu: QMenu) -> None:
+        menu.setStyleSheet(LIVE2D_CONTEXT_MENU_QSS)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        menu.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        menu.setAutoFillBackground(True)
+        pal = menu.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+        pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+        pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
+        pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
+        menu.setPalette(pal)
+
+    def _style_live2d_submenu(self, sm: QMenu) -> None:
+        sm.setStyleSheet(LIVE2D_CONTEXT_SUBMENU_QSS)
+        sm.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        sm.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        sm.setAutoFillBackground(True)
+        pal = sm.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+        pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+        pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
+        pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
+        sm.setPalette(pal)
+
+    def _expression_ids_for_menu(self) -> list[str]:
+        if not self.model:
+            return []
+        try:
+            if self._gl_ready and self.isValid():
+                self.makeCurrent()
+                try:
+                    raw = self.model.GetExpressionIds()
+                    return list(raw) if raw else []
+                finally:
+                    self.doneCurrent()
+        except Exception:
+            pass
+        try:
+            raw = self.model.GetExpressionIds()
+            return list(raw) if raw else []
+        except Exception:
+            return []
+
+    def _apply_expression_for_menu(self, index: int) -> None:
+        """우클릭 메뉴에서 표정 적용. index < 0 이면 표정만 초기화."""
+        if not self.model:
+            return
+        ctx = False
+        try:
+            ctx = bool(self._gl_ready) and self.isValid()
+        except Exception:
+            pass
+        try:
+            if ctx:
+                self.makeCurrent()
+            try:
+                if index < 0:
+                    self.model.ResetExpressions()
+                    self._last_applied_expression_index = None
+                else:
+                    ok = self._set_expression_by_index(index)
+                    if ok:
+                        self._last_applied_expression_index = index
+            finally:
+                if ctx:
+                    self.doneCurrent()
+        except Exception:
+            pass
+        self.update()
+
+    @staticmethod
+    def _context_menu_payload(data):
+        if not isinstance(data, tuple) or len(data) < 1:
+            return None
+        if data[0] == "m" and len(data) == 3:
+            g, idx = data[1], data[2]
+            if isinstance(g, str) and isinstance(idx, int):
+                return ("m", g, idx)
+            if isinstance(g, str) and isinstance(idx, float):
+                return ("m", g, int(idx))
+        if data[0] == "e" and len(data) == 2 and isinstance(data[1], int):
+            return ("e", data[1])
+        return None
+
+    def _deferred_show_context_menu(self, global_pos: QPoint) -> None:
+        if not self.model or self._embed_preview_controls:
+            return
+        if not self._main_window_live2d_drag():
+            return
+        self._show_live2d_context_menu(global_pos)
+
+    def _show_live2d_context_menu(self, global_pos: QPoint) -> None:
+        """메인 Live2D: 우클릭으로 표정(전체)·모션·펫 전용 항목."""
+        if not self.model or self._embed_preview_controls:
+            return
+        if not self._main_window_live2d_drag():
+            return
+        win = self.window()
+        menu_parent = win if is_app_main_window(win) else self
+        menu = QMenu(menu_parent)
+        menu.setObjectName("live2dContextMenu")
+        self._style_live2d_context_menu(menu)
+
+        sub_expr = menu.addMenu("표정")
+        self._style_live2d_submenu(sub_expr)
+        act_expr_reset = sub_expr.addAction("표정 끄기 (초기화)")
+        act_expr_reset.setData(("e", -1))
+        ids = self._expression_ids_for_menu()
+        if ids:
+            sub_expr.addSeparator()
+            for i, eid in enumerate(ids):
+                label = str(eid).strip() or f"#{i}"
+                a = sub_expr.addAction(f"{i} — {label}")
+                a.setData(("e", i))
+        else:
+            sub_expr.addSeparator()
+            na = sub_expr.addAction("(등록된 표정 없음)")
+            na.setEnabled(False)
+
+        menu.addSeparator()
+        act_tap = menu.addAction("기본 탭 반응 (모션)")
+        menu.addSeparator()
+        catalog = load_motion_catalog_for_folder(self._live2d_folder_name)
+        for group in sorted(catalog.keys(), key=lambda k: (k == "", k.lower())):
+            n = int(catalog[group])
+            if n <= 0:
+                continue
+            disp_group = "(기본 풀)" if group == "" else group
+            if n == 1:
+                a = menu.addAction(disp_group)
+                a.setData(("m", group, 0))
+            else:
+                sub = menu.addMenu(disp_group)
+                self._style_live2d_submenu(sub)
+                for i in range(n):
+                    a = sub.addAction(f"모션 {i}")
+                    a.setData(("m", group, i))
+
+        act_chat = None
+        act_exit = None
+        if self._main_is_desktop_pet() and is_app_main_window(win):
+            menu.addSeparator()
+            placed = bool(getattr(win, "_pet_floating_chat_placed", False))
+            act_chat = menu.addAction(
+                "플로팅 채팅 숨기기" if placed else "플로팅 채팅 보이기"
+            )
+            act_exit = menu.addAction("채팅 모드로 복귀")
+
+        chosen = menu.exec(global_pos)
+        if chosen is None:
+            return
+        if chosen == act_tap:
+            self.play_tap_interaction()
+            return
+        if act_chat is not None and chosen == act_chat and is_app_main_window(win):
+            if getattr(win, "_pet_floating_chat_placed", False):
+                win.hide_pet_floating_chat()
+            else:
+                lp = self.mapFromGlobal(global_pos)
+                win.show_pet_floating_chat_at(int(lp.x()), int(lp.y()))
+            return
+        if act_exit is not None and chosen == act_exit and is_app_main_window(win):
+            win.exit_desktop_pet_mode()
+            return
+        payload = self._context_menu_payload(chosen.data())
+        if payload is None:
+            return
+        kind = payload[0]
+        if kind == "e":
+            self._apply_expression_for_menu(int(payload[1]))
+        elif kind == "m":
+            self.start_motion(payload[1], payload[2])
 
     def clear_emotion_dedup(self) -> None:
         """새 assistant 턴마다 호출: 이전 답과 같은 표정 인덱스여도 다시 적용되게 함."""
@@ -382,6 +596,13 @@ class Live2DWidget(QOpenGLWidget):
             return True
         except Exception:
             return False
+
+    def set_expression_preview_index(self, index: int) -> bool:
+        """설정 미리보기 등: 표정 인덱스만 적용하고 즉시 다시 그립니다."""
+        ok = self._set_expression_by_index(int(index))
+        if ok:
+            self.update()
+        return ok
 
     def _resolve_app_config(self):
         """MainWindow.config: window() 실패·중첩 시 부모 체인으로 탐색."""
@@ -419,13 +640,13 @@ class Live2DWidget(QOpenGLWidget):
             build_emo_map_from_profile,
             extract_emotion_indices,
         )
-        from core.model_profile import profile_for_folder
+        from core.model_profile import effective_profile_for_folder
 
         # 실제 로드된 모델 폴더 우선 (설정과 불일치 시에도 emotionMap·표정 인덱스가 맞게)
         folder_key = (self._live2d_folder_name or "").strip()
         if not folder_key:
             folder_key = str(live.get("model_folder", "") or "").strip()
-        prof = profile_for_folder(folder_key)
+        prof = effective_profile_for_folder(folder_key)
         em = build_emo_map_from_profile(prof)
         if not em:
             log_emotion_apply_step(
@@ -586,10 +807,13 @@ class Live2DWidget(QOpenGLWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if (
-            self._main_window_live2d_drag()
+            (
+                self._main_window_live2d_drag()
+                or self._embed_preview_controls
+            )
             and event.button() == Qt.MouseButton.LeftButton
         ):
-            if self._main_is_desktop_pet():
+            if self._main_window_live2d_drag() and self._main_is_desktop_pet():
                 self._pet_press_global = event.globalPosition().toPoint()
                 self._pet_shift_moves_window = bool(
                     event.modifiers() & Qt.KeyboardModifier.ShiftModifier
@@ -642,7 +866,10 @@ class Live2DWidget(QOpenGLWidget):
             event.accept()
             return
         if (
-            self._main_window_live2d_drag()
+            (
+                self._main_window_live2d_drag()
+                or self._embed_preview_controls
+            )
             and event.buttons() & Qt.MouseButton.LeftButton
             and self._cam_pan_pressed
             and self.model
@@ -668,18 +895,21 @@ class Live2DWidget(QOpenGLWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if (
-            self._main_window_live2d_drag()
+            (
+                self._main_window_live2d_drag()
+                or self._embed_preview_controls
+            )
             and event.button() == Qt.MouseButton.LeftButton
         ):
-            if self._main_is_desktop_pet():
+            if self._main_window_live2d_drag() and self._main_is_desktop_pet():
                 g0 = self._pet_press_global
                 if g0 is not None:
                     g1 = event.globalPosition().toPoint()
                     moved = abs(g1.x() - g0.x()) + abs(g1.y() - g0.y()) > 6
-                    if not moved:
+                    if not moved and not self._pet_shift_moves_window:
                         self.play_tap_interaction()
                         w = self.window()
-                        if is_app_main_window(w) and not self._pet_shift_moves_window:
+                        if is_app_main_window(w):
                             if getattr(w, "_pet_floating_chat_placed", False):
                                 w.hide_pet_floating_chat()
                             else:
@@ -697,6 +927,7 @@ class Live2DWidget(QOpenGLWidget):
                     self.model
                     and not self._cam_drag_moved
                     and self._cam_click_start is not None
+                    and not self._embed_preview_controls
                 ):
                     self.play_tap_interaction()
                 self._cam_pan_pressed = False
@@ -707,7 +938,13 @@ class Live2DWidget(QOpenGLWidget):
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if self._main_window_live2d_drag() and self.model:
+        if (
+            self.model
+            and (
+                self._main_window_live2d_drag()
+                or self._wheel_zoom_without_main_window
+            )
+        ):
             dy = event.angleDelta().y()
             if dy != 0:
                 step = 0.09 if dy > 0 else -0.09
@@ -719,31 +956,71 @@ class Live2DWidget(QOpenGLWidget):
         super().wheelEvent(event)
 
     def contextMenuEvent(self, event) -> None:
-        if self._main_is_desktop_pet() and self._main_window_live2d_drag():
-            win = self.window()
-            # OpenGL 자식에만 붙이면 합성이 깨질 수 있어 메인 창을 부모로 두고, 투명 속성 끔
-            menu_parent = win if is_app_main_window(win) else self
-            menu = QMenu(menu_parent)
-            menu.setObjectName("petDesktopContextMenu")
-            menu.setStyleSheet(PET_DESKTOP_CONTEXT_MENU_QSS)
-            menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-            menu.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-            menu.setAutoFillBackground(True)
-            pal = menu.palette()
-            pal.setColor(QPalette.ColorRole.Window, QColor("#1e1e2e"))
-            pal.setColor(QPalette.ColorRole.Base, QColor("#1e1e2e"))
-            pal.setColor(QPalette.ColorRole.Text, QColor("#cdd6f4"))
-            menu.setPalette(pal)
-            act_exit = menu.addAction("채팅 모드로 복귀")
-            chosen = menu.exec(event.globalPos())
-            if chosen == act_exit and is_app_main_window(win):
-                win.exit_desktop_pet_mode()
+        if self._embed_preview_controls:
+            super().contextMenuEvent(event)
+            return
+        if self.model and self._main_window_live2d_drag():
             event.accept()
+            # QContextMenuEvent: PySide6 에서는 globalPos() (QMouseEvent 와 달리 globalPosition 없음)
+            gp = event.globalPos()
+            QTimer.singleShot(
+                0, lambda p=QPoint(gp): self._deferred_show_context_menu(p)
+            )
             return
         super().contextMenuEvent(event)
 
+    def prepare_for_embedded_teardown(self) -> None:
+        """
+        설정 미리보기 등 embed_preview_controls 위젯 전용.
+        자식 QOpenGLWidget은 closeEvent가 오지 않을 수 있어, 부모 다이얼로그 닫기 전에
+        현재 GL 컨텍스트에서 모델을 해제하고 타이머를 멈춥니다(메인 Live2D와 충돌 방지).
+        """
+        if not self._embed_preview_controls:
+            return
+        self._embed_skip_paint = True
+        try:
+            self.hide()
+        except Exception:
+            pass
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+        if not self._gl_ready:
+            self.model = None
+            return
+        try:
+            if not self.isValid():
+                self.model = None
+                return
+        except Exception:
+            self.model = None
+            return
+        self.makeCurrent()
+        try:
+            if self.model is not None:
+                try:
+                    del self.model
+                except Exception:
+                    pass
+                self.model = None
+            try:
+                f = self._gl_funcs
+                if f is not None:
+                    f.glFinish()
+            except Exception:
+                pass
+        finally:
+            try:
+                self.doneCurrent()
+            except Exception:
+                pass
+
     def closeEvent(self, event):
-        # 앱 종료 시 Live2D 엔진 정리
+        if self._embed_preview_controls:
+            super().closeEvent(event)
+            return
+        # 앱 종료 시 Live2D 엔진 정리 (메인 창 단일 위젯만 dispose)
         if self.model:
             del self.model
         live2d.dispose()

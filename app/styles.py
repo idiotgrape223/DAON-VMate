@@ -23,6 +23,45 @@ QMenu#petDesktopContextMenu::item:selected {
 }
 """
 
+# Live2D 우클릭(표정·모션) 메뉴: 검정 텍스트 + 밝은 배경
+LIVE2D_CONTEXT_MENU_QSS = """
+QMenu#live2dContextMenu {
+    background-color: #ffffff;
+    border: 1px solid #c8ccd4;
+    border-radius: 8px;
+    padding: 6px 0px;
+}
+QMenu#live2dContextMenu::item {
+    background-color: transparent;
+    color: #000000;
+    padding: 10px 28px 10px 18px;
+    min-width: 170px;
+}
+QMenu#live2dContextMenu::item:selected {
+    background-color: #e8eaef;
+    color: #000000;
+}
+"""
+
+# Live2D 우클릭 서브메뉴(표정·모션 그룹 팝업): objectName 없이 QMenu 단독 스타일
+LIVE2D_CONTEXT_SUBMENU_QSS = """
+QMenu {
+    background-color: #ffffff;
+    border: 1px solid #c8ccd4;
+    border-radius: 8px;
+    padding: 4px 0px;
+}
+QMenu::item {
+    color: #000000;
+    padding: 8px 22px 8px 14px;
+    min-width: 140px;
+}
+QMenu::item:selected {
+    background-color: #e8eaef;
+    color: #000000;
+}
+"""
+
 # Live2D 상단 오버레이: 반투명 바 + 자식 QPushButton (화면 공유 / 캐릭터 모드 / 대화 기록 / 설정)
 LIVE2D_TOP_BAR_QSS = """
 #live2dTopBar {

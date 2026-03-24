@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 # settings.yaml의 system_prompt 앞에 API 전달 시 항상 붙는 고정 안내
 CORE_SYSTEM_PROMPT_PREFIX = """## Core System Prompt
-Do not use emoticons, emojis, or Markdown.
+IMPORTANT !!!DO NOT USE EMOTICONS, EMOJIS, OR MARKDOWN!!!
 When responding, you must prefix every sentence with a tag in brackets if an emotion is felt, such as [joy], [sadness], or [neutral]. Use only the tag names listed in the following system instructions. Select one from: [neutral], [joy], [sadness], [anger], [fear], [disgust], [surprise], [smirk]. Example: [joy] The weather is great today!
 Never invent other bracket tags (no Korean or other words inside brackets, e.g. not [당황] or [기쁨]); only the English keys above or those explicitly listed in the [Live2D 감정 태그] section below apply."""
 
@@ -133,9 +133,9 @@ class LLMEngine:
                 build_emo_map_from_profile,
                 emotion_tags_prompt_instruction,
             )
-            from core.model_profile import profile_for_folder
+            from core.model_profile import effective_profile_for_folder
 
-            prof = profile_for_folder(folder)
+            prof = effective_profile_for_folder(folder)
             em = build_emo_map_from_profile(prof)
             emotion_extra = emotion_tags_prompt_instruction(em) or ""
 
