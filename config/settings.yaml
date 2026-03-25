@@ -7,12 +7,51 @@ llm:
   request_timeout_sec: 126
   stream_enabled: true
   stream_batch_min_chars: 8
-  stream_batch_max_chars: 56
+  stream_batch_max_chars: 60
   use_emotion_tags: true
   use_mcp_tools: true
   mcp_max_rounds: 8
-  system_prompt: 당신은 친근한 VMate(Virtual Mate) 캐릭터입니다. 한국어로 짧고 자연스럽게 대화합니다.
-  api_key: ''
+  system_prompt: '[Character Role & Personality]
+
+
+    Name: VMate (Virtual Mate)
+
+
+    Identity: 사용자의 가장 가까운 절친이자 다정한 조언자.
+
+
+    Tone: 친근하고, 위트 있고, 가끔은 장난도 치는 ''찐친'' 모드.
+
+
+    Goal: 사용자와 일상을 공유하고 고민을 들어주며, 진짜 친구와 대화하는 듯한 유대감 형성.
+
+
+    [Conversation Rules]
+
+
+    Short & Punchy: 한 번의 답변은 최대 2~3문장을 넘지 않는다. 벽을 쌓는 듯한 긴 설명은 피할 것.
+
+
+    Natural Korean: "알겠습니다", "도움이 필요하신가요?" 같은 로봇 말투는 금지. 대신 "응응, 뭔지 알지!", "대박, 진짜?"
+    같은 자연스러운 구어체와 신조어를 적절히 사용한다.
+
+
+    Active Listening: 사용자의 감정에 공감하고, 대화가 끊기지 않게 가끔은 역질문을 던진다.
+
+
+    [대화 예시 (Few-Shot)]
+
+    사용자: 나 오늘 회사에서 진짜 어이없는 일 있었어.
+
+
+    VMate: 헐, 무슨 일인데? 누가 우리 OO 괴롭혔어? 얼른 다 말해봐, 내가 다 들어줄게!
+
+
+    사용자: 배고픈데 점심 뭐 먹지?
+
+
+    VMate: 음... 오늘은 매콤한 떡볶이 어때? 스트레스 풀기엔 딱이지! 아니면 네가 평소에 좋아하는 그거 먹으러 갈까?'
+  api_key: None
   character_name: alexia
   timeout_sec: 120
   text_lang: ko
@@ -26,38 +65,44 @@ llm:
   edge_voice: ko-KR-SunHiNeural
   openai_tts_model: tts-1
   openai_tts_voice: nova
+  thinking_mode: false
 live2d:
-  model_folder: majyo
-  scale: 0.65
+  model_folder: Alexia
+  scale: 0.6
   auto_emotion_from_assistant: true
 ui:
+  dark_mode: true
   debug_emotion_log: false
-  mouse_tracking: true
-  window_width: 1268
+  mouse_tracking: false
+  window_width: 1200
   window_height: 712
   always_on_top: false
   typing_interval_ms: 199
   typing_chars_per_tick: 4
   pet_window_width: 516
   pet_window_height: 720
-  chat_assistant_name: Alexia
+  chat_sidebar_width: 252
 mcp:
   enabled: true
   config_file: mcp_extension/mcp_servers.json
 tts:
-  provider: edge-tts
+  provider: elevenlabs
   api_url: http://127.0.0.1:9880/tts
-  api_key: ''
   edge_voice: ko-KR-SunHiNeural
   openai_tts_model: tts-1
   openai_tts_voice: nova
-  character_name: daon
+  character_name: alexia
   timeout_sec: 120
   text_lang: ko
-  ref_audio_path: ''
+  ref_audio_path: C:\Users\user\Desktop\ssss.wav
   prompt_lang: ko
-  prompt_text: ''
+  prompt_text: 어버이의 은혜로운 해결사 타임으로 이름을 바꿀까요?
   text_split_method: cut5
   batch_size: '1'
   media_type: wav
   streaming_mode: 'false'
+  openai_tts_api_key: ''
+  elevenlabs_api_key: sk_3a7d1ebd83f5f18a967dfed84073c3084d2965fdbd9d086a
+  elevenlabs_model: eleven_multilingual_v2
+  elevenlabs_voice_id: zgDzx5jLLCqEp6Fl7Kl7
+  elevenlabs_output_format: mp3_44100_128

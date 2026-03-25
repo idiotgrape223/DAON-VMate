@@ -7,6 +7,7 @@ emotionMap 값은 Live2D 표정(Expression) 목록의 인덱스.
 
 from __future__ import annotations
 
+import html
 import math
 import re
 from typing import Any, Optional
@@ -129,9 +130,9 @@ def strip_assistant_tags_for_pipeline(
     folder = str(live.get("model_folder", "") or "").strip()
     if not folder:
         return text
-    from core.model_profile import profile_for_folder
+    from core.model_profile import effective_profile_for_folder
 
-    prof = profile_for_folder(folder)
+    prof = effective_profile_for_folder(folder)
     em = build_emo_map_from_profile(prof)
     if not em:
         return text
@@ -143,17 +144,142 @@ def strip_assistant_tags_for_pipeline(
     return out
 
 
+# 줄 맨 앞만이 아니라, 한 줄 끝에 `... ### 답변 실제답` 처럼 붙은 경우도 인식해야 함
+_THINKING_ANSWER_HEADER = re.compile(r"###\s*답변\s*")
+
+
+def strip_thinking_mode_answer_only(text: str, full_config: Optional[dict[str, Any]]) -> str:
+    """
+    사고 모드 응답에서 `### 답변` 이후만 남깁니다(TTS·히스토리용).
+    설정이 꺼져 있거나 구분자가 없으면 원문을 그대로 둡니다.
+    """
+    if not text or not full_config:
+        return text
+    if not bool((full_config.get("llm") or {}).get("thinking_mode", False)):
+        return text
+    m = _THINKING_ANSWER_HEADER.search(text)
+    if not m:
+        return text
+    return text[m.end() :].lstrip()
+
+
+_THINKING_THINK_HEADER = re.compile(r"###\s*사고\s*")
+
+
+def assistant_thinking_display_body_html(
+    text: str,
+    full_config: Optional[dict[str, Any]],
+    *,
+    think_color: str,
+    body_color: str,
+    name_span_before_answer: Optional[str] = None,
+) -> Optional[str]:
+    """
+    사고 모드이고 `### 사고` / `### 답변` 구조가 있으면 헤더는 숨기고,
+    사고 본문은 기울임+think_color, 답변 본문은 body_color 로 RichText 조각을 반환.
+    `name_span_before_answer`가 있으면 답변 본문 직전에만 붙임(사고 블록 옆에는 이름 없음).
+    해당 없으면 None (호출측에서 일반 단일 스팬 처리).
+    """
+    if not text or not full_config:
+        return None
+    if not bool((full_config.get("llm") or {}).get("thinking_mode", False)):
+        return None
+
+    plain = assistant_history_plain(text, full_config)
+    s = plain if isinstance(plain, str) else text
+
+    def esc_br(sub: str) -> str:
+        return html.escape(sub).replace("\n", "<br/>")
+
+    mt = _THINKING_THINK_HEADER.search(s)
+    ma_only = _THINKING_ANSWER_HEADER.search(s)
+
+    if not mt and not ma_only:
+        return None
+
+    chunks: list[str] = []
+
+    if mt:
+        prefix = s[: mt.start()].rstrip()
+        after_think_hdr = s[mt.end() :]
+        ma_rel = _THINKING_ANSWER_HEADER.search(after_think_hdr)
+        if ma_rel:
+            think_body = after_think_hdr[: ma_rel.start()].strip()
+            answer_body = after_think_hdr[ma_rel.end() :].lstrip()
+        else:
+            think_body = after_think_hdr.strip()
+            answer_body = ""
+
+        if prefix:
+            chunks.append(
+                f'<span style="color:{body_color};">{esc_br(prefix)}</span>'
+            )
+        show_think = bool(think_body) or (
+            not ma_rel and bool(after_think_hdr.strip())
+        )
+        if show_think:
+            chunks.append(
+                f'<span style="color:{think_color};font-style:italic;">'
+                f"{esc_br(think_body)}</span>"
+            )
+        if answer_body:
+            if show_think:
+                chunks.append("<br/>")
+            if name_span_before_answer is not None:
+                chunks.append(name_span_before_answer)
+            chunks.append(
+                f'<span style="color:{body_color};">{esc_br(answer_body)}</span>'
+            )
+        return "".join(chunks) if chunks else None
+
+    if ma_only:
+        prefix = s[: ma_only.start()].rstrip()
+        answer_body = s[ma_only.end() :].lstrip()
+        if prefix:
+            chunks.append(
+                f'<span style="color:{body_color};">{esc_br(prefix)}</span>'
+            )
+        if answer_body:
+            if prefix:
+                chunks.append("<br/>")
+            if name_span_before_answer is not None:
+                chunks.append(name_span_before_answer)
+            chunks.append(
+                f'<span style="color:{body_color};">{esc_br(answer_body)}</span>'
+            )
+        return "".join(chunks) if chunks else None
+
+    return None
+
+
+def thinking_mode_answer_body_if_marked(
+    text: str, full_config: Optional[dict[str, Any]]
+) -> Optional[str]:
+    """
+    사고 모드이고 `### 답변` 헤더가 있을 때만 그 아래 본문을 반환.
+    마커가 없으면 None (스트리밍 TTS에서 사고 전체를 읽지 않도록 구분).
+    """
+    if not text or not full_config:
+        return None
+    if not bool((full_config.get("llm") or {}).get("thinking_mode", False)):
+        return None
+    m = _THINKING_ANSWER_HEADER.search(text)
+    if not m:
+        return None
+    return text[m.end() :].lstrip()
+
+
 def assistant_history_plain(text: str, full_config: Optional[dict[str, Any]]) -> str:
-    """히스토리 저장용 전체 답변에서 [태그] 제거 (Open-LLM remove_emotion_keywords)."""
+    """화면 표시·[태그] 제거용. 사고 블록 제거는 TTS/히스토리용으로 strip_thinking_mode_answer_only 를 별도 호출."""
     if not text or not full_config:
         return text
     live = full_config.get("live2d") or {}
     folder = str(live.get("model_folder", "") or "").strip()
     if not folder:
         return text
-    from core.model_profile import profile_for_folder
+    from core.model_profile import effective_profile_for_folder
 
-    prof = profile_for_folder(folder)
+    prof = effective_profile_for_folder(folder)
     em = build_emo_map_from_profile(prof)
     if not em:
         return text

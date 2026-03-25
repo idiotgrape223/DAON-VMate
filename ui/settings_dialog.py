@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from config.config_loader import save_config
 from config.llm_defaults import default_llm_api_url_for_provider
+from core.model_profile import repo_root
 from mcp_extension import DEFAULT_MCP_SERVERS_CONFIG_FILE
 from ui.hover_button import HoverAnimPushButton
 
@@ -290,6 +291,7 @@ class SettingsDialog(QDialog):
     def __init__(self, main_window, parent=None):
         super().__init__(parent or main_window)
         self.main = main_window
+        self._live2d_expression_dialog: QDialog | None = None
         self.setWindowTitle("환경 설정")
         self.setMinimumSize(640, 560)
         self.resize(760, 640)
@@ -349,6 +351,20 @@ class SettingsDialog(QDialog):
         self._load_values()
         self._sync_llm_form_for_provider()
         self._sync_tts_form_for_provider()
+        self._sync_live2d_model_extra_button()
+
+    def _close_live2d_expression_if_any(self) -> None:
+        w = self._live2d_expression_dialog
+        if w is None:
+            return
+        try:
+            w.close()
+        except RuntimeError:
+            pass
+
+    def done(self, r: int) -> None:
+        self._close_live2d_expression_if_any()
+        super().done(r)
 
     def _cfg(self):
         return self.main.config
@@ -381,15 +397,40 @@ class SettingsDialog(QDialog):
             "응답에 따른 표정 반영 (Auto Emotion)"
         )
         fl.addRow(self.chk_auto_emotion)
+        btn_char_prompt = HoverAnimPushButton("캐릭터 프롬프트 설정")
+        btn_char_prompt.setToolTip(
+            "모델 폴더에 daon_(폴더이름)_settings.json 으로 저장되며, "
+            "채팅 시 LLM 시스템 프롬프트에 합쳐집니다."
+        )
+        btn_char_prompt.clicked.connect(self._open_live2d_character_prompt_dialog)
+        fl.addRow(btn_char_prompt)
+        self.btn_model_extra = HoverAnimPushButton("모델 추가 셋팅")
+        self.btn_model_extra.setToolTip(
+            "감정 태그([joy] 등)와 Live2D 표정 인덱스·모션 그룹을 이 모델 폴더에만 저장합니다 "
+            "(daon_(폴더)_expression_settings.json)."
+        )
+        self.btn_model_extra.clicked.connect(self._open_live2d_expression_settings_dialog)
+        fl.addRow(self.btn_model_extra)
+        self.combo_folder.currentTextChanged.connect(self._sync_live2d_model_extra_button)
         self.chk_mouse_tracking = QCheckBox("마우스 시선 추적 (Mouse Tracking)")
         fl.addRow(self.chk_mouse_tracking)
         layout.addWidget(g_live)
 
+        g_llm_behavior = QGroupBox("LLM")
+        fl_llm = QFormLayout(g_llm_behavior)
+        fl_llm.setSpacing(10)
+        self.chk_thinking_mode = QCheckBox("사고 모드 (Thinking mode)")
+        self.chk_thinking_mode.setToolTip(
+            "켜면 시스템 프롬프트에 지시가 추가되어, 답변 전에 ### 사고 … ### 답변 형식으로 "
+            "추론 과정을 먼저 씁니다. MCP 도구 전용 턴은 예외로 마커만 출력합니다.\n"
+            "TTS·다음 대화용 히스토리에는 ### 답변 이후만 넣습니다. "
+            "스트리밍+TTS 사용 시 사고 구간이 음성에 섞일 수 있으니 필요하면 스트리밍을 끄세요."
+        )
+        fl_llm.addRow(self.chk_thinking_mode)
+        layout.addWidget(g_llm_behavior)
+
         g_win = QGroupBox("창 (UI)")
         fw = QFormLayout(g_win)
-        self.edit_chat_assistant_name = QLineEdit()
-        self.edit_chat_assistant_name.setPlaceholderText("채팅 말풍선에 표시")
-        fw.addRow("채팅 주체 이름", self.edit_chat_assistant_name)
         self.spin_w = QSpinBox()
         self.spin_w.setRange(480, 3840)
         self.spin_h = QSpinBox()
@@ -407,6 +448,8 @@ class SettingsDialog(QDialog):
         self.spin_pet_h = QSpinBox()
         self.spin_pet_h.setRange(200, 1600)
         fw.addRow(self.chk_top)
+        self.chk_dark_mode = QCheckBox("다크 모드 (채팅·사이드바·상단 바)")
+        fw.addRow(self.chk_dark_mode)
         fw.addRow("타이핑 간격", self.spin_typing_ms)
         fw.addRow("타이핑 글자/틱", self.spin_typing_chars)
         fw.addRow("캐릭터 모드 창 너비", self.spin_pet_w)
@@ -549,7 +592,9 @@ class SettingsDialog(QDialog):
         self._form_tts = f
 
         self.combo_tts_provider = QComboBox()
-        self.combo_tts_provider.addItems(["gpt-sovits", "edge-tts", "openai_tts", "custom"])
+        self.combo_tts_provider.addItems(
+            ["gpt-sovits", "edge-tts", "openai_tts", "elevenlabs", "custom"]
+        )
 
         self.edit_tts_url = QLineEdit()
         self.edit_tts_url.setPlaceholderText(
@@ -558,9 +603,24 @@ class SettingsDialog(QDialog):
         self.edit_tts_char = QLineEdit()
         self.edit_tts_char.setPlaceholderText("GPT-SoVITS 메모용 (선택)")
 
-        self.edit_tts_api_key = QLineEdit()
-        self.edit_tts_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.edit_tts_api_key.setPlaceholderText("OpenAI TTS 전용")
+        self.edit_tts_openai_api_key = QLineEdit()
+        self.edit_tts_openai_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_tts_openai_api_key.setPlaceholderText("OpenAI TTS 전용")
+
+        self.edit_tts_elevenlabs_api_key = QLineEdit()
+        self.edit_tts_elevenlabs_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_tts_elevenlabs_api_key.setPlaceholderText("ElevenLabs xi-api-key")
+
+        self.edit_tts_elevenlabs_model = QLineEdit()
+        self.edit_tts_elevenlabs_model.setPlaceholderText("예: eleven_multilingual_v2")
+        self.edit_tts_elevenlabs_voice_id = QLineEdit()
+        self.edit_tts_elevenlabs_voice_id.setPlaceholderText(
+            "대시보드 보이스 목록의 Voice ID"
+        )
+        self.edit_tts_elevenlabs_output_format = QLineEdit()
+        self.edit_tts_elevenlabs_output_format.setPlaceholderText(
+            "예: mp3_44100_128 (SDK output_format)"
+        )
 
         self.edit_tts_edge_voice = QLineEdit()
         self.edit_tts_edge_voice.setPlaceholderText("예: ko-KR-SunHiNeural")
@@ -596,7 +656,11 @@ class SettingsDialog(QDialog):
 
         f.addRow("제공자", self.combo_tts_provider)
         f.addRow("API URL", self.edit_tts_url)
-        f.addRow("API 키 (OpenAI TTS)", self.edit_tts_api_key)
+        f.addRow("API 키 (OpenAI TTS)", self.edit_tts_openai_api_key)
+        f.addRow("API 키 (ElevenLabs)", self.edit_tts_elevenlabs_api_key)
+        f.addRow("ElevenLabs 모델 ID", self.edit_tts_elevenlabs_model)
+        f.addRow("ElevenLabs Voice ID", self.edit_tts_elevenlabs_voice_id)
+        f.addRow("ElevenLabs 출력 형식", self.edit_tts_elevenlabs_output_format)
         f.addRow("Edge 음성 (voice)", self.edit_tts_edge_voice)
         f.addRow("OpenAI TTS 모델", self.edit_tts_openai_model)
         f.addRow("OpenAI TTS 보이스", self.edit_tts_openai_voice)
@@ -626,10 +690,15 @@ class SettingsDialog(QDialog):
         gpt = p == "gpt-sovits"
         edge = p == "edge-tts"
         oai = p == "openai_tts"
+        el = p == "elevenlabs"
         cust = p == "custom"
 
         self._form_tts.setRowVisible(self.edit_tts_url, gpt or oai or cust)
-        self._form_tts.setRowVisible(self.edit_tts_api_key, oai)
+        self._form_tts.setRowVisible(self.edit_tts_openai_api_key, oai)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_api_key, el)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_model, el)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_voice_id, el)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_output_format, el)
         self._form_tts.setRowVisible(self.edit_tts_edge_voice, edge)
         self._form_tts.setRowVisible(self.edit_tts_openai_model, oai)
         self._form_tts.setRowVisible(self.edit_tts_openai_voice, oai)
@@ -650,7 +719,12 @@ class SettingsDialog(QDialog):
             ),
             "openai_tts": (
                 "OpenAI Speech API: POST /v1/audio/speech. "
-                "베이스 URL만 넣으면 /v1/audio/speech 가 붙습니다. API 키 필수."
+                "베이스 URL만 넣으면 /v1/audio/speech 가 붙습니다. OpenAI 전용 API 키를 입력하세요."
+            ),
+            "elevenlabs": (
+                "ElevenLabs 공식 SDK(elevenlabs 패키지)로 text_to_speech.convert 를 호출합니다. "
+                "미설치 시 REST로 폴백합니다. 출력 형식은 SDK와 동일한 output_format 문자열 "
+                "(기본 mp3_44100_128). EU 리전 등은 settings.yaml 의 tts.elevenlabs_api_base 로 조정."
             ),
             "custom": (
                 "먼저 GET ?text= 로 오디오를 요청하고, 실패 시 POST JSON {\"text\":\"...\"} 를 시도합니다. "
@@ -676,6 +750,12 @@ class SettingsDialog(QDialog):
         f.addRow("상태", self.lbl_mcp_runtime)
         self.chk_llm_use_mcp_tools = QCheckBox(
             "채팅에서 MCP 도구 사용"
+        )
+        self.chk_llm_use_mcp_tools.setToolTip(
+            "LLM이 <<<DAON_MCP_CALLS>>> 블록으로 도구를 호출합니다.\n"
+            "fragment에 등록된 서버가 합쳐집니다(예: web_search, file_agent).\n"
+            "web_search: Google 우선(CSE는 서버 env에 VMATE_GOOGLE_CSE_API_KEY·VMATE_GOOGLE_CSE_CX).\n"
+            "file_agent: workspace/ 폴더 파일 읽기·쓰기·삭제·목록."
         )
         f.addRow(self.chk_llm_use_mcp_tools)
         self.spin_mcp_max_rounds = QSpinBox()
@@ -716,12 +796,11 @@ class SettingsDialog(QDialog):
             bool(live.get("auto_emotion_from_assistant", True))
         )
         self.chk_mouse_tracking.setChecked(bool(ui.get("mouse_tracking", True)))
-        self.edit_chat_assistant_name.setText(
-            str(ui.get("chat_assistant_name", "DAON") or "DAON")
-        )
+        self.chk_thinking_mode.setChecked(bool(llm.get("thinking_mode", False)))
         self.spin_w.setValue(int(ui.get("window_width", 1280)))
         self.spin_h.setValue(int(ui.get("window_height", 720)))
         self.chk_top.setChecked(bool(ui.get("always_on_top", False)))
+        self.chk_dark_mode.setChecked(bool(ui.get("dark_mode", True)))
         self.spin_typing_ms.setValue(
             max(4, min(200, int(ui.get("typing_interval_ms", 26))))
         )
@@ -757,7 +836,22 @@ class SettingsDialog(QDialog):
         if i >= 0:
             self.combo_tts_provider.setCurrentIndex(i)
         self.edit_tts_url.setText(str(tts.get("api_url", "http://127.0.0.1:9880/tts")))
-        self.edit_tts_api_key.setText(str(tts.get("api_key", "")))
+        okey = str(tts.get("openai_tts_api_key", "") or "")
+        if not okey.strip():
+            okey = str(tts.get("api_key", "") or "")
+        self.edit_tts_openai_api_key.setText(okey)
+        self.edit_tts_elevenlabs_api_key.setText(
+            str(tts.get("elevenlabs_api_key", "") or "")
+        )
+        self.edit_tts_elevenlabs_model.setText(
+            str(tts.get("elevenlabs_model", "eleven_multilingual_v2"))
+        )
+        self.edit_tts_elevenlabs_voice_id.setText(
+            str(tts.get("elevenlabs_voice_id", ""))
+        )
+        self.edit_tts_elevenlabs_output_format.setText(
+            str(tts.get("elevenlabs_output_format", "mp3_44100_128"))
+        )
         self.edit_tts_edge_voice.setText(
             str(tts.get("edge_voice", "ko-KR-SunHiNeural"))
         )
@@ -800,6 +894,74 @@ class SettingsDialog(QDialog):
         idx = self.combo_folder.findText(name)
         if idx >= 0:
             self.combo_folder.setCurrentIndex(idx)
+        self._sync_live2d_model_extra_button()
+
+    def _sync_live2d_model_extra_button(self) -> None:
+        if not hasattr(self, "btn_model_extra"):
+            return
+        folder = self.combo_folder.currentText().strip()
+        base = os.path.join(repo_root(), "assets", "live2d-models", folder)
+        self.btn_model_extra.setEnabled(bool(folder) and os.path.isdir(base))
+
+    def _open_live2d_character_prompt_dialog(self) -> None:
+        folder = self.combo_folder.currentText().strip()
+        if not folder:
+            QMessageBox.warning(self, "Live2D", "모델 폴더를 먼저 선택하세요.")
+            return
+        base = os.path.join(repo_root(), "assets", "live2d-models", folder)
+        if not os.path.isdir(base):
+            QMessageBox.warning(
+                self,
+                "Live2D",
+                f"모델 폴더가 없습니다.\n{base}",
+            )
+            return
+        from ui.live2d_character_prompt_dialog import Live2DCharacterPromptDialog
+
+        dlg = Live2DCharacterPromptDialog(repo_root(), folder, self)
+        dlg.exec()
+
+    def _open_live2d_expression_settings_dialog(self) -> None:
+        folder = self.combo_folder.currentText().strip()
+        if not folder:
+            QMessageBox.warning(self, "Live2D", "모델 폴더를 먼저 선택하세요.")
+            return
+        base = os.path.join(repo_root(), "assets", "live2d-models", folder)
+        if not os.path.isdir(base):
+            QMessageBox.warning(
+                self,
+                "Live2D",
+                f"모델 폴더가 없습니다.\n{base}",
+            )
+            return
+        from ui.live2d_expression_settings_dialog import Live2DExpressionSettingsDialog
+
+        old = self._live2d_expression_dialog
+        if old is not None:
+            try:
+                if old.isVisible() and getattr(old, "_folder", "") == folder:
+                    old.raise_()
+                    old.activateWindow()
+                    return
+                old.close()
+            except RuntimeError:
+                self._live2d_expression_dialog = None
+
+        mw = self.main
+        dlg = Live2DExpressionSettingsDialog(
+            folder, mw if mw is not None else None, style_parent=self
+        )
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        try:
+            g = self.frameGeometry()
+            fg = dlg.frameGeometry()
+            dlg.move(g.center() - fg.center())
+        except Exception:
+            pass
+        self._live2d_expression_dialog = dlg
+        dlg.exec()
+        self._live2d_expression_dialog = None
 
     def _import_model_folder(self):
         source = QFileDialog.getExistingDirectory(self, "Live2D 모델 폴더 선택")
@@ -845,12 +1007,12 @@ class SettingsDialog(QDialog):
         c["live2d"]["scale"] = float(self.spin_scale.value())
         c["live2d"]["auto_emotion_from_assistant"] = self.chk_auto_emotion.isChecked()
         c["ui"]["mouse_tracking"] = self.chk_mouse_tracking.isChecked()
-        _aname = self.edit_chat_assistant_name.text().strip()
-        c["ui"]["chat_assistant_name"] = _aname if _aname else "DAON"
+        c["ui"].pop("chat_assistant_name", None)
         c["ui"]["window_width"] = int(self.spin_w.value())
         c["ui"]["window_height"] = int(self.spin_h.value())
         c["ui"].pop("transparent_background", None)
         c["ui"]["always_on_top"] = self.chk_top.isChecked()
+        c["ui"]["dark_mode"] = self.chk_dark_mode.isChecked()
         c["ui"]["typing_interval_ms"] = max(
             4, min(200, int(self.spin_typing_ms.value()))
         )
@@ -896,10 +1058,20 @@ class SettingsDialog(QDialog):
         c["llm"]["system_prompt"] = self.text_llm_system.toPlainText()
         c["llm"]["use_mcp_tools"] = self.chk_llm_use_mcp_tools.isChecked()
         c["llm"]["mcp_max_rounds"] = int(self.spin_mcp_max_rounds.value())
+        c["llm"]["thinking_mode"] = self.chk_thinking_mode.isChecked()
 
         c["tts"]["provider"] = self.combo_tts_provider.currentText()
         c["tts"]["api_url"] = self.edit_tts_url.text().strip()
-        c["tts"]["api_key"] = self.edit_tts_api_key.text().strip()
+        c["tts"]["openai_tts_api_key"] = self.edit_tts_openai_api_key.text().strip()
+        c["tts"]["elevenlabs_api_key"] = self.edit_tts_elevenlabs_api_key.text().strip()
+        c["tts"]["elevenlabs_model"] = (
+            self.edit_tts_elevenlabs_model.text().strip() or "eleven_multilingual_v2"
+        )
+        c["tts"]["elevenlabs_voice_id"] = self.edit_tts_elevenlabs_voice_id.text().strip()
+        c["tts"]["elevenlabs_output_format"] = (
+            self.edit_tts_elevenlabs_output_format.text().strip() or "mp3_44100_128"
+        )
+        c["tts"].pop("api_key", None)
         c["tts"]["edge_voice"] = self.edit_tts_edge_voice.text().strip() or "ko-KR-SunHiNeural"
         c["tts"]["openai_tts_model"] = (
             self.edit_tts_openai_model.text().strip() or "tts-1"
@@ -930,6 +1102,6 @@ class SettingsDialog(QDialog):
         self.main.apply_ui_from_config()
         self._refresh_mcp_status_label()
         self.main.reload_live2d()
-        if hasattr(self.main, "vtuber_manager"):
-            self.main.vtuber_manager.reload_from_config(c)
+        if hasattr(self.main, "vmate_manager"):
+            self.main.vmate_manager.reload_from_config(c)
         self.accept()

@@ -9,9 +9,13 @@ from PySide6.QtCore import QByteArray, QMetaObject, Qt, QThread, Signal, Q_ARG
 
 from core.audio_playback import play_wav_bytes_blocking, stop_playback
 from core.llm_attachments import LLMMediaAttachment, format_user_text_for_history
-from core.live2d_emotion_tags import strip_assistant_tags_for_pipeline
+from core.live2d_emotion_tags import (
+    assistant_history_plain,
+    strip_assistant_tags_for_pipeline,
+    thinking_mode_answer_body_if_marked,
+)
 from core.text_stream_batch import TextBatchAccumulator
-from core.vtuber_manager import VTuberManager
+from core.vmate_manager import VMateManager
 
 class _StreamSyncState:
     __slots__ = ("cv", "results", "llm_done", "batches_total")
@@ -41,14 +45,14 @@ class _LLMChatWorkerThread(QThread):
 
     def __init__(
         self,
-        vtuber_manager: VTuberManager,
+        vmate_manager: VMateManager,
         text: str,
         stop_event: threading.Event,
         attachments: Optional[list[LLMMediaAttachment]] = None,
         parent=None,
     ):
         super().__init__(parent)
-        self._vm = vtuber_manager
+        self._vm = vmate_manager
         self._text = text
         self._attachments = list(attachments or [])
         self._stop_event = stop_event
@@ -84,7 +88,7 @@ class _StreamChatWorkerThread(QThread):
 
     def __init__(
         self,
-        vtuber_manager: VTuberManager,
+        vmate_manager: VMateManager,
         user_text: str,
         chat_widget: "ChatWidget",
         stop_event: threading.Event,
@@ -93,7 +97,7 @@ class _StreamChatWorkerThread(QThread):
         parent=None,
     ):
         super().__init__(parent)
-        self._vm = vtuber_manager
+        self._vm = vmate_manager
         self._user = (user_text or "").strip()
         self._attachments = list(attachments or [])
         self._history_user_line = format_user_text_for_history(
@@ -251,6 +255,8 @@ class _StreamChatWorkerThread(QThread):
             t2.start()
 
             fc = getattr(llm, "_full_config", {}) or {}
+            thinking_mode = bool((fc.get("llm") or {}).get("thinking_mode", False))
+            display_plain_len = 0
             rolled = ""
             interrupted = False
             for delta in llm.iter_chat_stream(
@@ -271,6 +277,9 @@ class _StreamChatWorkerThread(QThread):
                     b_out = strip_assistant_tags_for_pipeline(b, fc)
                     if skip_tts:
                         self.text_batch.emit(self._invoke_gen, -1, b_out)
+                    elif thinking_mode:
+                        display_plain_len += len(b_out or "")
+                        self.text_batch.emit(self._invoke_gen, -1, b_out)
                     else:
                         segment_ui_ready[tts_batch_idx] = threading.Event()
                         batch_texts[tts_batch_idx] = b_out
@@ -286,6 +295,9 @@ class _StreamChatWorkerThread(QThread):
                         continue
                     b_out = strip_assistant_tags_for_pipeline(b, fc)
                     if skip_tts:
+                        self.text_batch.emit(self._invoke_gen, -1, b_out)
+                    elif thinking_mode:
+                        display_plain_len += len(b_out or "")
                         self.text_batch.emit(self._invoke_gen, -1, b_out)
                     else:
                         segment_ui_ready[tts_batch_idx] = threading.Event()
@@ -306,6 +318,40 @@ class _StreamChatWorkerThread(QThread):
                 return
 
             full = "".join(full_chunks).strip()
+
+            if thinking_mode and not skip_tts:
+                raw_ans = thinking_mode_answer_body_if_marked(full, fc)
+                if raw_ans is not None:
+                    tts_plain = assistant_history_plain(raw_ans, fc).strip()
+                else:
+                    # MCP 직후 등 `### 답변` 없이 평문만 올 때 무음 방지 (전체 답을 TTS)
+                    tts_plain = assistant_history_plain(full, fc).strip()
+                if tts_plain:
+                    t_acc = TextBatchAccumulator(
+                        llm.stream_batch_min_chars,
+                        llm.stream_batch_max_chars,
+                    )
+                    t_parts: list[str] = []
+                    t_parts.extend(t_acc.feed(tts_plain))
+                    t_parts.extend(t_acc.flush())
+                    for tb in t_parts:
+                        if not tb.strip():
+                            continue
+                        tb_out = strip_assistant_tags_for_pipeline(tb, fc)
+                        if not tb_out.strip():
+                            continue
+                        segment_ui_ready[tts_batch_idx] = threading.Event()
+                        batch_texts[tts_batch_idx] = tb_out
+                        QMetaObject.invokeMethod(
+                            self._cw,
+                            "_schedule_stream_tts_segment",
+                            Qt.QueuedConnection,
+                            Q_ARG(int, self._invoke_gen),
+                            Q_ARG(int, tts_batch_idx),
+                            Q_ARG(int, display_plain_len),
+                        )
+                        tts_in_q.put((tts_batch_idx, tb_out))
+                        tts_batch_idx += 1
             with shared.cv:
                 shared.batches_total = 0 if skip_tts else tts_batch_idx
                 shared.llm_done = True

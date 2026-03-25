@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "emotionMap": {
+    "anger": 6,
+    "disgust": 2,
+    "fear": 4,
+    "joy": 8,
+    "neutral": 9,
+    "sadness": 4,
+    "smirk": 0,
+    "surprise": 0
+  }
+}
