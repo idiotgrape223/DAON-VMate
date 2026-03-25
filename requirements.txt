@@ -12,6 +12,9 @@ aiohttp>=3.9.3
 edge-tts>=6.1.0
 miniaudio>=1.59
 
+# ElevenLabs TTS (provider: elevenlabs)
+elevenlabs>=1.50.0
+
 # Configuration
 PyYAML>=6.0.1
 

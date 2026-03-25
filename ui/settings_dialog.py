@@ -592,7 +592,9 @@ class SettingsDialog(QDialog):
         self._form_tts = f
 
         self.combo_tts_provider = QComboBox()
-        self.combo_tts_provider.addItems(["gpt-sovits", "edge-tts", "openai_tts", "custom"])
+        self.combo_tts_provider.addItems(
+            ["gpt-sovits", "edge-tts", "openai_tts", "elevenlabs", "custom"]
+        )
 
         self.edit_tts_url = QLineEdit()
         self.edit_tts_url.setPlaceholderText(
@@ -601,9 +603,24 @@ class SettingsDialog(QDialog):
         self.edit_tts_char = QLineEdit()
         self.edit_tts_char.setPlaceholderText("GPT-SoVITS 메모용 (선택)")
 
-        self.edit_tts_api_key = QLineEdit()
-        self.edit_tts_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.edit_tts_api_key.setPlaceholderText("OpenAI TTS 전용")
+        self.edit_tts_openai_api_key = QLineEdit()
+        self.edit_tts_openai_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_tts_openai_api_key.setPlaceholderText("OpenAI TTS 전용")
+
+        self.edit_tts_elevenlabs_api_key = QLineEdit()
+        self.edit_tts_elevenlabs_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_tts_elevenlabs_api_key.setPlaceholderText("ElevenLabs xi-api-key")
+
+        self.edit_tts_elevenlabs_model = QLineEdit()
+        self.edit_tts_elevenlabs_model.setPlaceholderText("예: eleven_multilingual_v2")
+        self.edit_tts_elevenlabs_voice_id = QLineEdit()
+        self.edit_tts_elevenlabs_voice_id.setPlaceholderText(
+            "대시보드 보이스 목록의 Voice ID"
+        )
+        self.edit_tts_elevenlabs_output_format = QLineEdit()
+        self.edit_tts_elevenlabs_output_format.setPlaceholderText(
+            "예: mp3_44100_128 (SDK output_format)"
+        )
 
         self.edit_tts_edge_voice = QLineEdit()
         self.edit_tts_edge_voice.setPlaceholderText("예: ko-KR-SunHiNeural")
@@ -639,7 +656,11 @@ class SettingsDialog(QDialog):
 
         f.addRow("제공자", self.combo_tts_provider)
         f.addRow("API URL", self.edit_tts_url)
-        f.addRow("API 키 (OpenAI TTS)", self.edit_tts_api_key)
+        f.addRow("API 키 (OpenAI TTS)", self.edit_tts_openai_api_key)
+        f.addRow("API 키 (ElevenLabs)", self.edit_tts_elevenlabs_api_key)
+        f.addRow("ElevenLabs 모델 ID", self.edit_tts_elevenlabs_model)
+        f.addRow("ElevenLabs Voice ID", self.edit_tts_elevenlabs_voice_id)
+        f.addRow("ElevenLabs 출력 형식", self.edit_tts_elevenlabs_output_format)
         f.addRow("Edge 음성 (voice)", self.edit_tts_edge_voice)
         f.addRow("OpenAI TTS 모델", self.edit_tts_openai_model)
         f.addRow("OpenAI TTS 보이스", self.edit_tts_openai_voice)
@@ -669,10 +690,15 @@ class SettingsDialog(QDialog):
         gpt = p == "gpt-sovits"
         edge = p == "edge-tts"
         oai = p == "openai_tts"
+        el = p == "elevenlabs"
         cust = p == "custom"
 
         self._form_tts.setRowVisible(self.edit_tts_url, gpt or oai or cust)
-        self._form_tts.setRowVisible(self.edit_tts_api_key, oai)
+        self._form_tts.setRowVisible(self.edit_tts_openai_api_key, oai)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_api_key, el)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_model, el)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_voice_id, el)
+        self._form_tts.setRowVisible(self.edit_tts_elevenlabs_output_format, el)
         self._form_tts.setRowVisible(self.edit_tts_edge_voice, edge)
         self._form_tts.setRowVisible(self.edit_tts_openai_model, oai)
         self._form_tts.setRowVisible(self.edit_tts_openai_voice, oai)
@@ -693,7 +719,12 @@ class SettingsDialog(QDialog):
             ),
             "openai_tts": (
                 "OpenAI Speech API: POST /v1/audio/speech. "
-                "베이스 URL만 넣으면 /v1/audio/speech 가 붙습니다. API 키 필수."
+                "베이스 URL만 넣으면 /v1/audio/speech 가 붙습니다. OpenAI 전용 API 키를 입력하세요."
+            ),
+            "elevenlabs": (
+                "ElevenLabs 공식 SDK(elevenlabs 패키지)로 text_to_speech.convert 를 호출합니다. "
+                "미설치 시 REST로 폴백합니다. 출력 형식은 SDK와 동일한 output_format 문자열 "
+                "(기본 mp3_44100_128). EU 리전 등은 settings.yaml 의 tts.elevenlabs_api_base 로 조정."
             ),
             "custom": (
                 "먼저 GET ?text= 로 오디오를 요청하고, 실패 시 POST JSON {\"text\":\"...\"} 를 시도합니다. "
@@ -805,7 +836,22 @@ class SettingsDialog(QDialog):
         if i >= 0:
             self.combo_tts_provider.setCurrentIndex(i)
         self.edit_tts_url.setText(str(tts.get("api_url", "http://127.0.0.1:9880/tts")))
-        self.edit_tts_api_key.setText(str(tts.get("api_key", "")))
+        okey = str(tts.get("openai_tts_api_key", "") or "")
+        if not okey.strip():
+            okey = str(tts.get("api_key", "") or "")
+        self.edit_tts_openai_api_key.setText(okey)
+        self.edit_tts_elevenlabs_api_key.setText(
+            str(tts.get("elevenlabs_api_key", "") or "")
+        )
+        self.edit_tts_elevenlabs_model.setText(
+            str(tts.get("elevenlabs_model", "eleven_multilingual_v2"))
+        )
+        self.edit_tts_elevenlabs_voice_id.setText(
+            str(tts.get("elevenlabs_voice_id", ""))
+        )
+        self.edit_tts_elevenlabs_output_format.setText(
+            str(tts.get("elevenlabs_output_format", "mp3_44100_128"))
+        )
         self.edit_tts_edge_voice.setText(
             str(tts.get("edge_voice", "ko-KR-SunHiNeural"))
         )
@@ -1016,7 +1062,16 @@ class SettingsDialog(QDialog):
 
         c["tts"]["provider"] = self.combo_tts_provider.currentText()
         c["tts"]["api_url"] = self.edit_tts_url.text().strip()
-        c["tts"]["api_key"] = self.edit_tts_api_key.text().strip()
+        c["tts"]["openai_tts_api_key"] = self.edit_tts_openai_api_key.text().strip()
+        c["tts"]["elevenlabs_api_key"] = self.edit_tts_elevenlabs_api_key.text().strip()
+        c["tts"]["elevenlabs_model"] = (
+            self.edit_tts_elevenlabs_model.text().strip() or "eleven_multilingual_v2"
+        )
+        c["tts"]["elevenlabs_voice_id"] = self.edit_tts_elevenlabs_voice_id.text().strip()
+        c["tts"]["elevenlabs_output_format"] = (
+            self.edit_tts_elevenlabs_output_format.text().strip() or "mp3_44100_128"
+        )
+        c["tts"].pop("api_key", None)
         c["tts"]["edge_voice"] = self.edit_tts_edge_voice.text().strip() or "ko-KR-SunHiNeural"
         c["tts"]["openai_tts_model"] = (
             self.edit_tts_openai_model.text().strip() or "tts-1"

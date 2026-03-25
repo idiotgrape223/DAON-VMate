@@ -565,6 +565,56 @@ class MainWindow(QMainWindow):
         """무테/투명 전환 후 한 틱 뒤 창 속성 + Live2D GL 재바인딩."""
         self._refresh_transparency_after_window_state_change()
         self.live2d_view.recreate_live2d_gl_for_alpha_mode()
+        self._apply_win32_dwm_for_frameless_state()
+
+    def _apply_win32_dwm_for_frameless_state(self) -> None:
+        """Windows 11 등에서 투명 무테 창 주변 DWM 테두리·둥근 모서리를 끕니다.
+
+        `show()` 직후 동기 호출로 첫 프레임 깜빡임을 줄이고, GL 재생성 뒤에는
+        `_sync_live2d_gl_after_window_surface_change`에서 한 번 더 맞춥니다.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            wid = int(self.winId())
+        except (TypeError, ValueError):
+            return
+        if wid == 0:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            dwm = ctypes.windll.dwmapi
+        except (OSError, AttributeError):
+            return
+        DWMWA_BORDER_COLOR = 34
+        DWMWA_WINDOW_CORNER_PREFERENCE = 33
+        DWM_COLOR_DEFAULT = 0xFFFFFFFF
+        DWM_COLOR_NONE = 0xFFFFFFFE
+        DWMWCP_DEFAULT = 0
+        DWMWCP_DONOTROUND = 1
+        hwnd = wintypes.HWND(wid)
+        if getattr(self, "_desktop_pet_mode", False):
+            border_val = DWM_COLOR_NONE
+            corner_val = DWMWCP_DONOTROUND
+        else:
+            border_val = DWM_COLOR_DEFAULT
+            corner_val = DWMWCP_DEFAULT
+        border = ctypes.c_uint(border_val)
+        corner = ctypes.c_uint(corner_val)
+        dwm.DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            ctypes.byref(border),
+            ctypes.sizeof(border),
+        )
+        dwm.DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(corner),
+            ctypes.sizeof(corner),
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._persist_active_chat_session()
@@ -861,6 +911,7 @@ class MainWindow(QMainWindow):
         self._layout_overlay_widgets()
         self.show()
         self.raise_()
+        self._apply_win32_dwm_for_frameless_state()
         QTimer.singleShot(0, self._sync_live2d_gl_after_window_surface_change)
 
     def exit_desktop_pet_mode(self) -> None:
@@ -932,6 +983,7 @@ class MainWindow(QMainWindow):
         self._layout_overlay_widgets()
         self.show()
         self.config.setdefault("ui", {}).pop("desktop_pet_mode", None)
+        self._apply_win32_dwm_for_frameless_state()
         QTimer.singleShot(0, self._sync_live2d_gl_after_window_surface_change)
 
     def get_available_models(self):
