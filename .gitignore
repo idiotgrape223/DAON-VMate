@@ -1,6 +1,5 @@
 .venv/
-.Cursor/
-# Cursor debug session NDJSON
+.cursor/
 debug-*.log
 __pycache__/
 *.pyc

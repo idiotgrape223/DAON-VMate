@@ -13,19 +13,73 @@ from core.llm_attachments import (
     build_ollama_user_message,
 )
 from core.llm_mcp_tools import (
+    MCP_MARK_BEGIN,
+    MCP_MARK_END,
     build_mcp_tools_prompt_suffix,
     execute_mcp_calls,
     inject_system_suffix,
+    mcp_emotion_allowlist_ko_sentence,
     parse_mcp_calls_from_text,
 )
-
 if TYPE_CHECKING:
     from core.mcp_client import MCPClientService
 
 # settings.yaml의 system_prompt 앞에 API 전달 시 항상 붙는 고정 안내
 CORE_SYSTEM_PROMPT_PREFIX = """## Core System Prompt
-Do not use emoticons, emojis, or Markdown.
-When responding, you must prefix every sentence with a tag in brackets if an emotion is felt, such as [joy], [sadness], or [neutral]. Use only the tag names listed in the following system instructions. Select one from: [neutral], [joy], [sadness], [anger], [fear], [disgust], [surprise], [smirk]. Example: [joy] The weather is great today!"""
+Emotion tags: when a feeling is expressed, prefix with exactly one allowed tag in ASCII brackets, e.g. [joy] or [neutral]. Allowed keys only: [neutral], [joy], [sadness], [anger], [fear], [disgust], [surprise], [smirk], or the English keys listed under [Live2D 감정 태그] below if that section is present.
+FORBIDDEN inside brackets: any Korean, Chinese, or other non-English word (e.g. NEVER use [웃음], [기쁨], [당황], [laugh]). Wrong tags will be stripped; use only the allowed English keys.
+IMPORTANT: Do not use emoticons, emojis, or Markdown formatting in the reply text."""
+
+THINKING_MODE_SYSTEM_APPEND = """Thinking Mode (Activated)
+
+In general conversations, please follow the format below before writing the final answer.
+
+Write ### 사고 on the first line and press enter.
+
+Below that, freely describe your thought process, such as assumptions, step-by-step reasoning, and exploring alternatives (multiple paragraphs are allowed).
+
+Once you finish thinking, write only ### 답변 on a single line and press enter.
+
+Below that, write the main text according to the existing character rules. Use only English emotion tags from the system instructions (e.g. [joy], [neutral]). Never use Korean or other words inside brackets.
+
+Exceptions (Must be strictly followed):
+
+For responses that require an MCP tool call (turns that must only include <<<DAON_MCP_CALLS>>>), do not use ### Thinking / ### Answer, and strictly follow the MCP guidelines instead.
+
+If the user explicitly states they want a one-line or immediate answer, you may keep the thinking block very short or omit it completely.."""
+
+
+def _user_text_suggests_mcp_tools(user_text: str) -> bool:
+    s = (user_text or "").strip()
+    if not s:
+        return False
+    lower = s.lower()
+    needles = (
+        "검색",
+        "search",
+        "workspace",
+        "파일",
+        "저장",
+        "wikipedia",
+        "웹에서",
+        "읽어",
+        "써줘",
+        "만들어",
+        "목록",
+        "csv",
+        "xlsx",
+        "excel",
+        "mcp",
+        "도구",
+        "열어",
+        "다운로드",
+        "http://",
+        "https://",
+    )
+    for n in needles:
+        if n in lower or n in s:
+            return True
+    return False
 
 
 class LLMEngine:
@@ -60,6 +114,7 @@ class LLMEngine:
         self.stream_batch_max_chars = int(llm.get("stream_batch_max_chars", 56))
         self.use_mcp_tools = bool(llm.get("use_mcp_tools", False))
         self.mcp_max_rounds = int(llm.get("mcp_max_rounds", 8))
+        self.thinking_mode = bool(llm.get("thinking_mode", False))
         self._mcp_client: MCPClientService | None = None
 
     def set_mcp_client(self, client: Optional["MCPClientService"]) -> None:
@@ -70,37 +125,57 @@ class LLMEngine:
         self._full_config = dict(config) if config else {}
 
     def _effective_system_prompt(self) -> str:
-        base = (self.system_prompt or "").strip()
         fc = self._full_config or {}
         llm_sec = fc.get("llm") or {}
         live = fc.get("live2d") or {}
-        if not bool(llm_sec.get("use_emotion_tags", True)):
-            body = base
-        elif not bool(live.get("auto_emotion_from_assistant", True)):
-            body = base
-        else:
+        base = (self.system_prompt or "").strip()
+        folder = str(live.get("model_folder", "") or "").strip()
+
+        emotion_extra = ""
+        if bool(llm_sec.get("use_emotion_tags", True)) and bool(
+            live.get("auto_emotion_from_assistant", True)
+        ):
             from core.live2d_emotion_tags import (
                 build_emo_map_from_profile,
                 emotion_tags_prompt_instruction,
             )
-            from core.model_profile import profile_for_folder
+            from core.model_profile import effective_profile_for_folder
 
-            folder = str(live.get("model_folder", "") or "").strip()
-            prof = profile_for_folder(folder)
+            prof = effective_profile_for_folder(folder)
             em = build_emo_map_from_profile(prof)
-            extra = emotion_tags_prompt_instruction(em)
-            if not extra:
-                body = base
-            elif base:
-                body = f"{base}{extra}"
-            else:
-                body = extra.lstrip()
+            emotion_extra = emotion_tags_prompt_instruction(em) or ""
+
+        model_extra = ""
+        if folder:
+            from core.live2d_character_settings import (
+                compose_character_prompt_block,
+                load_character_settings,
+            )
+            from core.model_profile import repo_root
+
+            ch = load_character_settings(repo_root(), folder)
+            model_extra = compose_character_prompt_block(folder, ch)
+
+        # 순서: 전역 프롬프트 → 감정 태그(기술) → 캐릭터 계약(맨 뒤 = 페르소나 우선·준수 강조)
+        parts: list[str] = []
+        if base:
+            parts.append(base)
+        if emotion_extra:
+            parts.append(emotion_extra.strip())
+        if model_extra:
+            parts.append(model_extra)
+
+        body = "\n\n".join(parts) if parts else ""
 
         core = CORE_SYSTEM_PROMPT_PREFIX.rstrip()
         rest = (body or "").strip()
         if rest:
-            return f"{core}\n\n{rest}"
-        return core
+            base = f"{core}\n\n{rest}"
+        else:
+            base = core
+        if self.thinking_mode:
+            return f"{base}\n\n{THINKING_MODE_SYSTEM_APPEND}".rstrip()
+        return base
 
     def apply_config(self, llm: dict) -> None:
         if not llm:
@@ -132,6 +207,8 @@ class LLMEngine:
             self.use_mcp_tools = bool(llm["use_mcp_tools"])
         if "mcp_max_rounds" in llm:
             self.mcp_max_rounds = max(1, min(32, int(llm["mcp_max_rounds"])))
+        if "thinking_mode" in llm:
+            self.thinking_mode = bool(llm["thinking_mode"])
 
     def _http_stream_timeout(self) -> tuple[float, float]:
         """
@@ -499,13 +576,16 @@ class LLMEngine:
         return "[LLM] 응답에 텍스트가 없습니다."
 
     def _mcp_tools_active(self) -> bool:
-        if not self.use_mcp_tools:
-            return False
         fc = self._full_config.get("mcp") if isinstance(self._full_config.get("mcp"), dict) else {}
-        if not bool(fc.get("enabled", False)):
-            return False
+        use = bool(self.use_mcp_tools)
+        en = bool(fc.get("enabled", False))
         mc = self._mcp_client
-        if mc is None or not mc.is_running():
+        running = mc is not None and mc.is_running()
+        if not use:
+            return False
+        if not en:
+            return False
+        if mc is None or not running:
             return False
         return True
 
@@ -633,19 +713,65 @@ class LLMEngine:
         assert self._mcp_client is not None
         messages = self._messages_for_chat(user_text, history, attachments)
         tools = self._mcp_client.list_all_tools_sync()
-        suffix = build_mcp_tools_prompt_suffix(tools)
+        suffix = build_mcp_tools_prompt_suffix(tools, self._full_config)
         messages = inject_system_suffix(messages, suffix)
         max_r = max(1, min(32, int(self.mcp_max_rounds)))
 
-        for _ in range(max_r):
+        _mcp_marker_nudge_count = 0
+        for round_i in range(max_r):
             reply = self._generate_from_messages(messages)
             if reply.startswith("[LLM]"):
                 return reply
             _clean, calls = parse_mcp_calls_from_text(reply)
+            has_marker = MCP_MARK_BEGIN in (reply or "")
             if not calls:
+                _intent = _user_text_suggests_mcp_tools(user_text)
+                _legacy_first = (
+                    round_i == 0
+                    and tools
+                    and not has_marker
+                    and (reply or "").strip()
+                    and not reply.lstrip().startswith("[LLM]")
+                    and _mcp_marker_nudge_count == 0
+                )
+                _want_first_nudge = _legacy_first and _intent
+                _want_second_nudge = (
+                    round_i >= 1
+                    and tools
+                    and not has_marker
+                    and (reply or "").strip()
+                    and not reply.lstrip().startswith("[LLM]")
+                    and _mcp_marker_nudge_count == 1
+                    and _intent
+                )
+                if _want_first_nudge or _want_second_nudge:
+                    messages.append({"role": "assistant", "content": reply.strip()})
+                    _emo_allow = mcp_emotion_allowlist_ko_sentence(self._full_config)
+                    _emo_tail = f" {_emo_allow}" if _emo_allow else ""
+                    if _want_first_nudge:
+                        _nudge_body = (
+                            "방금 응답에 MCP 도구 호출 마커가 없었습니다. 다음 중 하나만 수행하세요.\n"
+                            f"(A) MCP 도구가 필요하면: 감정 태그와 평문 설명 없이, "
+                            f"응답 전체를 오직 {MCP_MARK_BEGIN} 와 {MCP_MARK_END} 사이의 JSON 배열 한 덩어리로만 출력하세요. "
+                            "여러 서버·여러 도구를 한 번에 쓸 때는 배열에 객체를 여러 개 넣으면 됩니다.\n"
+                            f"(B) MCP 도구가 전혀 필요 없으면: 평소처럼 감정 태그를 붙여 답하세요.{_emo_tail}"
+                        )
+                    else:
+                        _nudge_body = (
+                            "앞의 Core 규칙 중 감정 태그는 **이번 assistant 응답 한 번만** 잠시 무시하세요. "
+                            "사용자 요청을 파일·웹검색 등 MCP 도구로 처리해야 한다면, "
+                            f"지금은 반드시 {MCP_MARK_BEGIN} 와 {MCP_MARK_END} 사이에만 유효한 JSON 배열을 넣고, "
+                            "그 밖의 글자(감정 태그·설명)를 한 글자도 쓰지 마세요. "
+                            f"도구가 정말 필요 없을 때만 이번에 허용된 **영문** 감정 태그로 짧게 답하세요.{_emo_tail}"
+                        )
+                    messages.append({"role": "user", "content": _nudge_body})
+                    _mcp_marker_nudge_count += 1
+                    continue
                 return _clean if _clean.strip() else reply.strip()
             messages.append({"role": "assistant", "content": reply.strip()})
-            feedback = execute_mcp_calls(self._mcp_client, calls)
+            feedback = execute_mcp_calls(
+                self._mcp_client, calls, full_config=self._full_config
+            )
             messages.append({"role": "user", "content": feedback})
 
         return "[LLM] MCP 도구 호출 라운드 상한에 도달했습니다. 요청을 단순화해 보세요."

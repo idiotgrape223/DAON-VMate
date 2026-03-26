@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -52,21 +53,35 @@ from core.audio_playback import (
 from core.llm_attachments import (
     LLMMediaAttachment,
     MAX_LLM_ATTACHMENTS,
+    format_user_text_for_history,
     load_attachment_from_path,
 )
-from core.live2d_emotion_tags import assistant_history_plain
 
+# 유휴 시 LLM에만 보내는 유도 문구(히스토리에는 짧은 줄만 남김).
+_IDLE_PROACTIVE_LLM_TEXT = (
+    "[시스템·유도] 사용자가 설정한 시간 동안 이 앱에서 입력이나 조작이 없었습니다. "
+    "당신(캐릭터)이 먼저 말을 걸어 대화를 이어가 주세요. "
+    "말투는 시스템 프롬프트대로, 1~3문장으로 가볍게. 깊고 전문적으로 이야기 할 필요 없이 쉽고 자연스럽게 말해주세요. "
+    "이미지를 첨부 하고 있다면 그 이미지에서 어떤 것들이 보이는지 간단하게 설명해도 괜찮습니다. 다만, 이미지가 없는경우에는 그런 뉘앙스를 넣지 마세요."
+)
+from core.live2d_character_settings import get_assistant_display_name
+from core.live2d_emotion_tags import (
+    assistant_history_plain,
+    assistant_thinking_display_body_html,
+)
+from core.model_profile import repo_root
 
 class ChatWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setStyleSheet("""
-            QFrame {
-                background-color: rgba(255, 255, 255, 220);
-                border-radius: 10px;
-            }
-        """)
+        self._dark_mode = True
+        self._c_body = "#cdd6f4"
+        self._c_user = "#89b4fa"
+        self._c_assist = "#f5c2e7"
+        self._c_muted = "#7f849c"
+        self._c_err = "#f38ba8"
+        self.setObjectName("vmateChatFrame")
         self.setFixedHeight(200)
 
         self._chat_thread: Optional[QThread] = None
@@ -98,6 +113,7 @@ class ChatWidget(QFrame):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background: transparent; border: none;")
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         self.history_widget = QWidget()
         self.history_layout = QVBoxLayout()
@@ -110,9 +126,6 @@ class ChatWidget(QFrame):
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
         self._apply_input_placeholder_for_assistant()
-        self.input_field.setStyleSheet(
-            "padding: 8px; border-radius: 5px; border: 1px solid #ccc; background: white;"
-        )
         self.input_field.returnPressed.connect(self.send_message)
 
         self.btn_attach = QToolButton(self)
@@ -122,10 +135,6 @@ class ChatWidget(QFrame):
             "OpenAI 호환 API는 PDF를 파일 파트로 보내고, Ollama는 추출 텍스트를 넣습니다."
         )
         self.btn_attach.setFixedSize(34, 34)
-        self.btn_attach.setStyleSheet(
-            "QToolButton { border: 1px solid #ccc; border-radius: 5px; background: #fff; }"
-            "QToolButton:hover { background: #f0f4ff; border-color: #99b; }"
-        )
         self.btn_attach.clicked.connect(self._pick_attachments)
         self.btn_attach.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_attach.customContextMenuRequested.connect(
@@ -133,37 +142,14 @@ class ChatWidget(QFrame):
         )
 
         self._attach_badge = QLabel("")
-        self._attach_badge.setStyleSheet("color:#666;font-size:11px;")
         self._attach_badge.setMaximumWidth(56)
 
-        self.btn_send = HoverAnimPushButton(
-            "전송",
-            shadow_color=QColor(0, 123, 255, 95),
-            hover_blur=22,
-        )
-        self.btn_send.setStyleSheet(
-            "QPushButton { padding: 8px 15px; background: #007bff; color: white; "
-            "border-radius: 5px; font-weight: bold; border: none; }"
-            "QPushButton:hover { background: #1a8cff; }"
-            "QPushButton:pressed { background: #0069d9; }"
-            "QPushButton:disabled { background: #6c757d; color: #e9ecef; }"
-        )
+        self.btn_send = HoverAnimPushButton("전송", hover_blur=22)
         self.btn_send.clicked.connect(self.send_message)
 
-        self.btn_interrupt = HoverAnimPushButton(
-            "중단",
-            shadow_color=QColor(220, 53, 69, 95),
-            hover_blur=22,
-        )
+        self.btn_interrupt = HoverAnimPushButton("중단", hover_blur=22)
         self.btn_interrupt.setToolTip(
             "응답 생성·타이핑·음성 재생을 즉시 멈춥니다."
-        )
-        self.btn_interrupt.setStyleSheet(
-            "QPushButton { padding: 8px 12px; background: #dc3545; color: white; "
-            "border-radius: 5px; font-weight: bold; border: none; }"
-            "QPushButton:hover { background: #e4606d; }"
-            "QPushButton:pressed { background: #bd2130; }"
-            "QPushButton:disabled { background: #adb5bd; color: #f8f9fa; }"
         )
         self.btn_interrupt.clicked.connect(self.request_interrupt)
         self.btn_interrupt.setEnabled(False)
@@ -191,6 +177,126 @@ class ChatWidget(QFrame):
             w.setAcceptDrops(True)
             w.installEventFilter(self)
             self._drop_watch_targets.append(w)
+
+        self.apply_dark_mode_from_parent_config()
+
+    def apply_dark_mode_from_parent_config(self) -> None:
+        dark = True
+        if self.parent is not None and hasattr(self.parent, "config"):
+            dark = bool(self.parent.config.get("ui", {}).get("dark_mode", True))
+        self.apply_dark_mode(dark)
+
+    def _set_push_shadow(self, btn: HoverAnimPushButton, color: QColor) -> None:
+        eff = btn.graphicsEffect()
+        if isinstance(eff, QGraphicsDropShadowEffect):
+            eff.setColor(color)
+
+    def apply_dark_mode(self, dark: bool) -> None:
+        self._dark_mode = bool(dark)
+        if self._dark_mode:
+            self._c_body = "#cdd6f4"
+            self._c_user = "#89b4fa"
+            self._c_assist = "#f5c2e7"
+            self._c_muted = "#7f849c"
+            self._c_err = "#f38ba8"
+            self.setStyleSheet(
+                """
+                QFrame#vmateChatFrame {
+                    background-color: rgba(24, 24, 37, 0.94);
+                    border: 1px solid rgba(69, 71, 90, 0.98);
+                    border-radius: 14px;
+                }
+                QScrollArea { background: transparent; border: none; }
+                QScrollBar:vertical {
+                    background: #181825;
+                    width: 8px;
+                    margin: 2px;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #45475a;
+                    min-height: 28px;
+                    border-radius: 4px;
+                }
+                """
+            )
+            self.input_field.setStyleSheet(
+                "padding: 8px 12px; border-radius: 8px; border: 1px solid #45475a; "
+                "background: #1e1e2e; color: #cdd6f4; selection-background-color: #45475a;"
+            )
+            self.btn_attach.setStyleSheet(
+                "QToolButton { border: 1px solid #45475a; border-radius: 8px; background: #313244; }"
+                "QToolButton:hover { background: #45475a; border-color: #585b70; }"
+            )
+            self.btn_send.setStyleSheet(
+                "QPushButton { padding: 8px 16px; background: #89b4fa; color: #11111b; "
+                "border-radius: 8px; font-weight: 600; border: 1px solid #89b4fa; }"
+                "QPushButton:hover { background: #b4befe; border-color: #b4befe; }"
+                "QPushButton:pressed { background: #7287fd; border-color: #7287fd; color: #11111b; }"
+                "QPushButton:disabled { background: #45475a; color: #7f849c; border-color: #45475a; }"
+            )
+            self.btn_interrupt.setStyleSheet(
+                "QPushButton { padding: 8px 12px; background: #313244; color: #f38ba8; "
+                "border-radius: 8px; font-weight: 600; border: 1px solid #45475a; }"
+                "QPushButton:hover { background: #45475a; color: #eba0ac; }"
+                "QPushButton:pressed { background: #1e1e2e; }"
+                "QPushButton:disabled { background: #181825; color: #585b70; border-color: #313244; }"
+            )
+            self._set_push_shadow(self.btn_send, QColor(137, 180, 250, 90))
+            self._set_push_shadow(self.btn_interrupt, QColor(243, 139, 168, 95))
+        else:
+            self._c_body = "#222222"
+            self._c_user = "#0056b3"
+            self._c_assist = "#d63384"
+            self._c_muted = "#666666"
+            self._c_err = "#cc0000"
+            self.setStyleSheet(
+                """
+                QFrame#vmateChatFrame {
+                    background-color: rgba(255, 255, 255, 220);
+                    border-radius: 10px;
+                }
+                QScrollArea { background: transparent; border: none; }
+                QScrollBar:vertical {
+                    background: #e8e8e8;
+                    width: 8px;
+                    margin: 2px;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #b0b0b0;
+                    min-height: 28px;
+                    border-radius: 4px;
+                }
+                """
+            )
+            self.input_field.setStyleSheet(
+                "padding: 8px; border-radius: 5px; border: 1px solid #ccc; "
+                "background: white; color: #222; selection-background-color: #b3d7ff;"
+            )
+            self.btn_attach.setStyleSheet(
+                "QToolButton { border: 1px solid #ccc; border-radius: 5px; background: #fff; }"
+                "QToolButton:hover { background: #f0f4ff; border-color: #99b; }"
+            )
+            self.btn_send.setStyleSheet(
+                "QPushButton { padding: 8px 15px; background: #007bff; color: white; "
+                "border-radius: 5px; font-weight: bold; border: none; }"
+                "QPushButton:hover { background: #1a8cff; }"
+                "QPushButton:pressed { background: #0069d9; }"
+                "QPushButton:disabled { background: #6c757d; color: #e9ecef; }"
+            )
+            self.btn_interrupt.setStyleSheet(
+                "QPushButton { padding: 8px 12px; background: #dc3545; color: white; "
+                "border-radius: 5px; font-weight: bold; border: none; }"
+                "QPushButton:hover { background: #e4606d; }"
+                "QPushButton:pressed { background: #bd2130; }"
+                "QPushButton:disabled { background: #adb5bd; color: #f8f9fa; }"
+            )
+            self._set_push_shadow(self.btn_send, QColor(0, 123, 255, 95))
+            self._set_push_shadow(self.btn_interrupt, QColor(220, 53, 69, 95))
+        self._attach_badge.setStyleSheet(
+            f"color:{self._c_muted};font-size:11px;"
+        )
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched in self._drop_watch_targets:
@@ -338,16 +444,28 @@ class ChatWidget(QFrame):
         self._refresh_attach_badge()
 
     def _assistant_display_name(self) -> str:
-        if not self.parent or not hasattr(self.parent, "config"):
+        mw = self.window()
+        if is_app_main_window(mw) and hasattr(mw, "current_live2d_model_folder"):
+            folder = mw.current_live2d_model_folder()
+            legacy = str(
+                getattr(mw, "config", {}).get("ui", {}).get("chat_assistant_name", "")
+                or ""
+            ).strip()
+        elif self.parent and hasattr(self.parent, "config"):
+            cfg = self.parent.config
+            folder = str(cfg.get("live2d", {}).get("model_folder", "") or "").strip()
+            legacy = str(cfg.get("ui", {}).get("chat_assistant_name", "") or "").strip()
+        else:
             return "DAON"
-        raw = str(
-            self.parent.config.get("ui", {}).get("chat_assistant_name", "") or ""
-        ).strip()
-        return raw if raw else "DAON"
+        return get_assistant_display_name(
+            repo_root(),
+            folder,
+            legacy_chat_assistant_name=legacy or None,
+        )
 
     def _assistant_name_span_html(self) -> str:
         n = html.escape(self._assistant_display_name())
-        return f'<span style="color:#d63384;font-weight:bold;">{n}:</span> '
+        return f'<span style="color:{self._c_assist};font-weight:bold;">{n}:</span> '
 
     def _apply_input_placeholder_for_assistant(self) -> None:
         n = self._assistant_display_name()
@@ -406,15 +524,28 @@ class ChatWidget(QFrame):
         if not self._type_timer.isActive():
             self._type_timer.start()
 
+    def _assistant_bubble_label_html(self, raw_text: str) -> str:
+        """사고 모드면 이름은 `### 답변` 본문 앞에만 붙이고, 그 외에는 말풍선 맨 앞에 붙입니다."""
+        cfg = getattr(self.parent, "config", None) or {}
+        name_sp = self._assistant_name_span_html()
+        styled = assistant_thinking_display_body_html(
+            raw_text,
+            cfg,
+            think_color=self._c_muted,
+            body_color=self._c_body,
+            name_span_before_answer=name_sp,
+        )
+        if styled is not None:
+            return styled
+        show = assistant_history_plain(raw_text, cfg)
+        esc = html.escape(show).replace("\n", "<br/>")
+        return name_sp + f'<span style="color:{self._c_body};">{esc}</span>'
+
     def _update_pending_label_html(self) -> None:
         if not self._pending_reply_label:
             return
         plain = getattr(self, "_streaming_plain", "") or ""
-        body = html.escape(plain).replace("\n", "<br/>")
-        self._pending_reply_label.setText(
-            self._assistant_name_span_html()
-            + f'<span style="color:#222;">{body}</span>'
-        )
+        self._pending_reply_label.setText(self._assistant_bubble_label_html(plain))
 
     def _release_stream_segments_if_caught_up(self) -> None:
         """스트리밍 TTS: 화면에 해당 구간 글자가 다 나온 뒤에만 재생 스레드가 진행하도록."""
@@ -520,13 +651,12 @@ class ChatWidget(QFrame):
         self._chat_thread = None
         plain = getattr(self, "_streaming_plain", "") or ""
         if plain.strip():
-            body = html.escape(plain.rstrip() + "\n[중단됨]").replace("\n", "<br/>")
+            interrupt_plain = plain.rstrip() + "\n[중단됨]"
         else:
-            body = html.escape("[중단됨]").replace("\n", "<br/>")
+            interrupt_plain = "[중단됨]"
         if self._pending_reply_label:
             self._pending_reply_label.setText(
-                self._assistant_name_span_html()
-                + f'<span style="color:#222;">{body}</span>'
+                self._assistant_bubble_label_html(interrupt_plain)
             )
         self._pending_reply_label = None
         self._stream_motion_once = False
@@ -546,9 +676,87 @@ class ChatWidget(QFrame):
             th.deleteLater()
         self._sync_interrupt_button_state()
 
-    def add_message(self, sender, text, is_user=True):
-        color = "#0056b3" if is_user else "#d63384"
-        msg_label = QLabel(f'<span style="color:{color}; font-weight:bold;">{sender}:</span> {text}')
+    def _touch_main_window_user_activity(self) -> None:
+        mw = self.window()
+        if is_app_main_window(mw) and hasattr(mw, "touch_user_activity"):
+            mw.touch_user_activity()
+
+    def is_pipeline_busy(self) -> bool:
+        if not self.input_field.isEnabled():
+            return True
+        if self._type_timer.isActive():
+            return True
+        if self._chat_thread is not None and self._chat_thread.isRunning():
+            return True
+        return False
+
+    def clear_conversation_ui(self) -> None:
+        while self.history_layout.count():
+            item = self.history_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def load_history_messages(self, messages: list[dict[str, str]]) -> None:
+        self.clear_conversation_ui()
+        aname = self._assistant_display_name()
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "").strip()
+            content = (m.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "user":
+                body = html.escape(content).replace("\n", "<br/>")
+                self.add_message("User", body, is_user=True)
+            elif role == "assistant":
+                cfg = getattr(self.parent, "config", None) or {}
+                name_sp = self._assistant_name_span_html()
+                styled = assistant_thinking_display_body_html(
+                    content,
+                    cfg,
+                    think_color=self._c_muted,
+                    body_color=self._c_body,
+                    name_span_before_answer=name_sp,
+                )
+                if styled is not None:
+                    self.add_message(
+                        "",
+                        styled,
+                        is_user=False,
+                        assistant_row_html_complete=True,
+                    )
+                else:
+                    body = html.escape(content).replace("\n", "<br/>")
+                    self.add_message(aname, body, is_user=False)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def add_message(
+        self,
+        sender,
+        text,
+        is_user=True,
+        *,
+        assistant_row_html_complete: bool = False,
+    ):
+        if assistant_row_html_complete:
+            msg_label = QLabel(text)
+            msg_label.setTextFormat(Qt.TextFormat.RichText)
+            msg_label.setWordWrap(True)
+            msg_label.setStyleSheet("background: transparent;")
+            self.history_layout.addWidget(msg_label)
+            self.scroll.verticalScrollBar().setValue(
+                self.scroll.verticalScrollBar().maximum()
+            )
+            return
+        esc = html.escape(sender)
+        name_c = self._c_user if is_user else self._c_assist
+        msg_label = QLabel(
+            f'<span style="color:{name_c};font-weight:bold;">{esc}:</span> '
+            f'<span style="color:{self._c_body};">{text}</span>'
+        )
+        msg_label.setTextFormat(Qt.TextFormat.RichText)
         msg_label.setWordWrap(True)
         msg_label.setStyleSheet("background: transparent;")
         self.history_layout.addWidget(msg_label)
@@ -644,19 +852,15 @@ class ChatWidget(QFrame):
         dots = "." * (self._wait_phase + 1)
         self._pending_reply_label.setText(
             self._assistant_name_span_html()
-            + f'<span style="color:#888;font-style:italic;">답변 생성 중{dots}</span>'
+            + f'<span style="color:{self._c_muted};font-style:italic;">답변 생성 중{dots}</span>'
         )
         self._scroll_to_bottom()
 
     def _finish_pending_assistant(self, text: str) -> None:
         self._wait_timer.stop()
         if self._pending_reply_label:
-            cfg = getattr(self.parent, "config", None) or {}
-            show = assistant_history_plain(text or "", cfg)
-            body = html.escape(show).replace("\n", "<br/>")
             self._pending_reply_label.setText(
-                self._assistant_name_span_html()
-                + f'<span style="color:#222;">{body}</span>'
+                self._assistant_bubble_label_html(text or "")
             )
             self._pending_reply_label = None
         self._scroll_to_bottom()
@@ -742,6 +946,16 @@ class ChatWidget(QFrame):
             return
         self.parent.live2d_view.apply_emotion_for_assistant_text(rolled)
 
+    @Slot(int, int, int)
+    def _schedule_stream_tts_segment(
+        self, invoke_gen: int, segment_idx: int, release_after_len: int
+    ) -> None:
+        """사고 모드 스트리밍: 전체 답이 타이핑된 뒤에만 TTS 구간 재생이 풀리도록 잠금 길이 등록."""
+        if int(invoke_gen) != self._stream_invoke_gen:
+            return
+        self._stream_segment_release_at[int(segment_idx)] = int(release_after_len)
+        self._release_stream_segments_if_caught_up()
+
     @Slot(int, int, str)
     def _on_text_batch(self, invoke_gen: int, segment_idx: int, batch: str) -> None:
         if int(invoke_gen) != self._stream_invoke_gen:
@@ -779,7 +993,7 @@ class ChatWidget(QFrame):
         if self._pending_reply_label:
             self._pending_reply_label.setText(
                 self._assistant_name_span_html()
-                + f'<span style="color:#c00;">[오류] {esc}</span>'
+                + f'<span style="color:{self._c_err};">[오류] {esc}</span>'
             )
         self._pending_reply_label = None
         if hasattr(self, "_streaming_plain"):
@@ -817,6 +1031,8 @@ class ChatWidget(QFrame):
         if not text and not pending:
             return
 
+        self._touch_main_window_user_activity()
+
         if text:
             display = html.escape(text)
         else:
@@ -824,7 +1040,7 @@ class ChatWidget(QFrame):
         if pending:
             esc_names = ", ".join(html.escape(a.original_name) for a in pending)
             display += (
-                f"<br/><span style=\"color:#888;font-size:11px;\">첨부: {esc_names}</span>"
+                f"<br/><span style=\"color:{self._c_muted};font-size:11px;\">첨부: {esc_names}</span>"
             )
 
         self.add_message("User", display, is_user=True)
@@ -855,12 +1071,13 @@ class ChatWidget(QFrame):
             self._stream_invoke_gen += 1
             stream_gen = self._stream_invoke_gen
             self._chat_thread = _StreamChatWorkerThread(
-                self.parent.vtuber_manager,
+                self.parent.vmate_manager,
                 text,
                 self,
                 self._stop_pipeline,
                 pending,
                 stream_gen,
+                None,
                 self,
             )
             self._chat_thread.text_batch.connect(self._on_text_batch)
@@ -875,13 +1092,99 @@ class ChatWidget(QFrame):
             self._chat_thread.start()
         else:
             self._chat_thread = _LLMChatWorkerThread(
-                self.parent.vtuber_manager,
+                self.parent.vmate_manager,
                 text,
                 self._stop_pipeline,
                 pending,
+                None,
                 self,
             )
             self._chat_thread.response_ready.connect(self._on_response_ready)
             self._chat_thread.response_failed.connect(self._on_response_failed)
             self._chat_thread.start()
+
+    def send_idle_proactive_message(self) -> bool:
+        """설정된 유휴 시간 경과 시 메인 창 타이머에서 호출. 일반 전송과 동일한 첨부 규칙."""
+        if self._chat_thread is not None and self._chat_thread.isRunning():
+            if self._stop_pipeline.is_set():
+                self._detach_chat_worker_signals(self._chat_thread)
+                self._chat_thread = None
+            else:
+                return False
+
+        llm_text = _IDLE_PROACTIVE_LLM_TEXT
+        pending: list[LLMMediaAttachment] = []
+        mw = self.window()
+        if is_app_main_window(mw):
+            extra = mw.current_screen_share_attachment_for_llm()
+            if extra is not None:
+                while len(pending) >= MAX_LLM_ATTACHMENTS:
+                    pending.pop(0)
+                pending.append(extra)
+
+        hist_line = format_user_text_for_history("(유휴) 캐릭터가 먼저 말함", pending)
+        display = f'<span style="color:{self._c_muted};">(유휴 · 캐릭터가 먼저 말함)</span>'
+        if pending:
+            esc_names = ", ".join(html.escape(a.original_name) for a in pending)
+            display += (
+                f"<br/><span style=\"color:{self._c_muted};font-size:11px;\">첨부: {esc_names}</span>"
+            )
+
+        self.add_message("User", display, is_user=True)
+        self._stop_pipeline.clear()
+        self._add_pending_assistant()
+        self._set_input_busy(True)
+        self._stream_motion_once = False
+        self._reload_typing_config()
+        self._typing_sync = TypingSyncState()
+        self._type_buffer = ""
+        self._streaming_plain = ""
+        self._emotion_plain_source = ""
+        self._stream_segment_release_at.clear()
+        self._stream_typing_cumulative = 0
+        self._pipeline_done = False
+        self._post_typewriter_audio = None
+        self._post_typewriter_text = None
+        self._assistant_finalize_done = False
+        self.parent.live2d_view.clear_emotion_dedup()
+
+        llm_cfg = self.parent.config.get("llm", {})
+        use_stream = bool(llm_cfg.get("stream_enabled", True))
+
+        if use_stream:
+            self._stream_invoke_gen += 1
+            stream_gen = self._stream_invoke_gen
+            self._chat_thread = _StreamChatWorkerThread(
+                self.parent.vmate_manager,
+                llm_text,
+                self,
+                self._stop_pipeline,
+                pending,
+                stream_gen,
+                hist_line,
+                self,
+            )
+            self._chat_thread.text_batch.connect(self._on_text_batch)
+            self._chat_thread.assistant_raw_progress.connect(
+                self._on_assistant_raw_progress
+            )
+            self._chat_thread.stream_finished.connect(self._on_stream_finished)
+            self._chat_thread.stream_failed.connect(self._on_stream_failed)
+            self._chat_thread.pipeline_interrupted.connect(
+                self._on_pipeline_interrupted
+            )
+            self._chat_thread.start()
+        else:
+            self._chat_thread = _LLMChatWorkerThread(
+                self.parent.vmate_manager,
+                llm_text,
+                self._stop_pipeline,
+                pending,
+                hist_line,
+                self,
+            )
+            self._chat_thread.response_ready.connect(self._on_response_ready)
+            self._chat_thread.response_failed.connect(self._on_response_failed)
+            self._chat_thread.start()
+        return True
 

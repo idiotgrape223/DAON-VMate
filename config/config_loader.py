@@ -1,5 +1,10 @@
+import logging
 import os
+
 import yaml
+
+logger = logging.getLogger(__name__)
+
 
 def load_config():
     """
@@ -10,7 +15,7 @@ def load_config():
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     except Exception as e:
-        print(f"[Config] 설정 파일 로드 실패: {e}")
+        logger.error("설정 파일 로드 실패: %s", e)
         return {}
 
 def save_config(config_dict):
@@ -23,5 +28,5 @@ def save_config(config_dict):
             yaml.dump(config_dict, f, allow_unicode=True, sort_keys=False)
         return True
     except Exception as e:
-        print(f"[Config] 설정 파일 저장 실패: {e}")
+        logger.error("설정 파일 저장 실패: %s", e)
         return False

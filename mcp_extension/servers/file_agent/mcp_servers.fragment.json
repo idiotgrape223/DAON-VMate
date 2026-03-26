@@ -1,0 +1,9 @@
+{
+  "mcp_servers": {
+    "file_agent": {
+      "command": "python",
+      "args": ["-m", "mcp_extension.servers.file_agent"],
+      "cwd": "."
+    }
+  }
+}
