@@ -103,11 +103,17 @@ class VMateManager:
         self,
         text: str,
         attachments: Optional[list[LLMMediaAttachment]] = None,
+        history_user_content: Optional[str] = None,
     ):
         text = (text or "").strip()
         atts = list(attachments or [])
         history_snapshot = list(self._chat_history)
-        hist_user = format_user_text_for_history(text, atts)
+        if history_user_content is None:
+            hist_user = format_user_text_for_history(text, atts)
+        else:
+            hist_user = (history_user_content or "").strip()
+            if not hist_user:
+                hist_user = format_user_text_for_history(text, atts)
 
         response_text = self.llm_engine.generate_response(
             text,
