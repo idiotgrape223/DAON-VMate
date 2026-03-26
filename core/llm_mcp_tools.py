@@ -221,9 +221,9 @@ def execute_mcp_calls(
     if full_config and bool((full_config.get("llm") or {}).get("thinking_mode")):
         body = (
             f"{body}\n\n"
-            "[사고 모드] 위 결과를 반영한 **최종** 사용자 답변은 반드시 "
-            "`### 사고`(내부 추론) 다음에 `### 답변`(실제 대화 문장) 형식으로 작성하세요. "
-            "도구 결과 요약만 평문 한 덩어리로 보내지 마세요."
+            "Thinking Mode (Activated) "
+            "The final user response reflecting the above results must be written in the format of `### 사고` (internal reasoning) followed by `### 답변` (actual conversation sentences). "
+            "do not send only the summary of tool results as plain text."
         )
     return body
 

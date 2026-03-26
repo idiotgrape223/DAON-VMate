@@ -53,7 +53,16 @@ from core.audio_playback import (
 from core.llm_attachments import (
     LLMMediaAttachment,
     MAX_LLM_ATTACHMENTS,
+    format_user_text_for_history,
     load_attachment_from_path,
+)
+
+# 유휴 시 LLM에만 보내는 유도 문구(히스토리에는 짧은 줄만 남김).
+_IDLE_PROACTIVE_LLM_TEXT = (
+    "[시스템·유도] 사용자가 설정한 시간 동안 이 앱에서 입력이나 조작이 없었습니다. "
+    "당신(캐릭터)이 먼저 말을 걸어 대화를 이어가 주세요. "
+    "말투는 시스템 프롬프트대로, 1~3문장으로 가볍게. 깊고 전문적으로 이야기 할 필요 없이 쉽고 자연스럽게 말해주세요. "
+    "이미지를 첨부 하고 있다면 그 이미지에서 어떤 것들이 보이는지 간단하게 설명해도 괜찮습니다. 다만, 이미지가 없는경우에는 그런 뉘앙스를 넣지 마세요."
 )
 from core.live2d_character_settings import get_assistant_display_name
 from core.live2d_emotion_tags import (
@@ -435,11 +444,19 @@ class ChatWidget(QFrame):
         self._refresh_attach_badge()
 
     def _assistant_display_name(self) -> str:
-        if not self.parent or not hasattr(self.parent, "config"):
+        mw = self.window()
+        if is_app_main_window(mw) and hasattr(mw, "current_live2d_model_folder"):
+            folder = mw.current_live2d_model_folder()
+            legacy = str(
+                getattr(mw, "config", {}).get("ui", {}).get("chat_assistant_name", "")
+                or ""
+            ).strip()
+        elif self.parent and hasattr(self.parent, "config"):
+            cfg = self.parent.config
+            folder = str(cfg.get("live2d", {}).get("model_folder", "") or "").strip()
+            legacy = str(cfg.get("ui", {}).get("chat_assistant_name", "") or "").strip()
+        else:
             return "DAON"
-        cfg = self.parent.config
-        folder = str(cfg.get("live2d", {}).get("model_folder", "") or "").strip()
-        legacy = str(cfg.get("ui", {}).get("chat_assistant_name", "") or "").strip()
         return get_assistant_display_name(
             repo_root(),
             folder,
@@ -658,6 +675,11 @@ class ChatWidget(QFrame):
         if th is not None:
             th.deleteLater()
         self._sync_interrupt_button_state()
+
+    def _touch_main_window_user_activity(self) -> None:
+        mw = self.window()
+        if is_app_main_window(mw) and hasattr(mw, "touch_user_activity"):
+            mw.touch_user_activity()
 
     def is_pipeline_busy(self) -> bool:
         if not self.input_field.isEnabled():
@@ -1009,6 +1031,8 @@ class ChatWidget(QFrame):
         if not text and not pending:
             return
 
+        self._touch_main_window_user_activity()
+
         if text:
             display = html.escape(text)
         else:
@@ -1053,6 +1077,7 @@ class ChatWidget(QFrame):
                 self._stop_pipeline,
                 pending,
                 stream_gen,
+                None,
                 self,
             )
             self._chat_thread.text_batch.connect(self._on_text_batch)
@@ -1071,9 +1096,95 @@ class ChatWidget(QFrame):
                 text,
                 self._stop_pipeline,
                 pending,
+                None,
                 self,
             )
             self._chat_thread.response_ready.connect(self._on_response_ready)
             self._chat_thread.response_failed.connect(self._on_response_failed)
             self._chat_thread.start()
+
+    def send_idle_proactive_message(self) -> bool:
+        """설정된 유휴 시간 경과 시 메인 창 타이머에서 호출. 일반 전송과 동일한 첨부 규칙."""
+        if self._chat_thread is not None and self._chat_thread.isRunning():
+            if self._stop_pipeline.is_set():
+                self._detach_chat_worker_signals(self._chat_thread)
+                self._chat_thread = None
+            else:
+                return False
+
+        llm_text = _IDLE_PROACTIVE_LLM_TEXT
+        pending: list[LLMMediaAttachment] = []
+        mw = self.window()
+        if is_app_main_window(mw):
+            extra = mw.current_screen_share_attachment_for_llm()
+            if extra is not None:
+                while len(pending) >= MAX_LLM_ATTACHMENTS:
+                    pending.pop(0)
+                pending.append(extra)
+
+        hist_line = format_user_text_for_history("(유휴) 캐릭터가 먼저 말함", pending)
+        display = f'<span style="color:{self._c_muted};">(유휴 · 캐릭터가 먼저 말함)</span>'
+        if pending:
+            esc_names = ", ".join(html.escape(a.original_name) for a in pending)
+            display += (
+                f"<br/><span style=\"color:{self._c_muted};font-size:11px;\">첨부: {esc_names}</span>"
+            )
+
+        self.add_message("User", display, is_user=True)
+        self._stop_pipeline.clear()
+        self._add_pending_assistant()
+        self._set_input_busy(True)
+        self._stream_motion_once = False
+        self._reload_typing_config()
+        self._typing_sync = TypingSyncState()
+        self._type_buffer = ""
+        self._streaming_plain = ""
+        self._emotion_plain_source = ""
+        self._stream_segment_release_at.clear()
+        self._stream_typing_cumulative = 0
+        self._pipeline_done = False
+        self._post_typewriter_audio = None
+        self._post_typewriter_text = None
+        self._assistant_finalize_done = False
+        self.parent.live2d_view.clear_emotion_dedup()
+
+        llm_cfg = self.parent.config.get("llm", {})
+        use_stream = bool(llm_cfg.get("stream_enabled", True))
+
+        if use_stream:
+            self._stream_invoke_gen += 1
+            stream_gen = self._stream_invoke_gen
+            self._chat_thread = _StreamChatWorkerThread(
+                self.parent.vmate_manager,
+                llm_text,
+                self,
+                self._stop_pipeline,
+                pending,
+                stream_gen,
+                hist_line,
+                self,
+            )
+            self._chat_thread.text_batch.connect(self._on_text_batch)
+            self._chat_thread.assistant_raw_progress.connect(
+                self._on_assistant_raw_progress
+            )
+            self._chat_thread.stream_finished.connect(self._on_stream_finished)
+            self._chat_thread.stream_failed.connect(self._on_stream_failed)
+            self._chat_thread.pipeline_interrupted.connect(
+                self._on_pipeline_interrupted
+            )
+            self._chat_thread.start()
+        else:
+            self._chat_thread = _LLMChatWorkerThread(
+                self.parent.vmate_manager,
+                llm_text,
+                self._stop_pipeline,
+                pending,
+                hist_line,
+                self,
+            )
+            self._chat_thread.response_ready.connect(self._on_response_ready)
+            self._chat_thread.response_failed.connect(self._on_response_failed)
+            self._chat_thread.start()
+        return True
 

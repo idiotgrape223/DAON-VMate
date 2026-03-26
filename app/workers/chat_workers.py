@@ -49,6 +49,7 @@ class _LLMChatWorkerThread(QThread):
         text: str,
         stop_event: threading.Event,
         attachments: Optional[list[LLMMediaAttachment]] = None,
+        history_user_content: Optional[str] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -56,12 +57,14 @@ class _LLMChatWorkerThread(QThread):
         self._text = text
         self._attachments = list(attachments or [])
         self._stop_event = stop_event
+        self._history_user_content = history_user_content
 
     def run(self) -> None:
         try:
             response_text, audio = self._vm.process_user_input(
                 self._text,
                 attachments=self._attachments or None,
+                history_user_content=self._history_user_content,
             )
             if self.isInterruptionRequested() or self._stop_event.is_set():
                 return
@@ -94,15 +97,23 @@ class _StreamChatWorkerThread(QThread):
         stop_event: threading.Event,
         attachments: Optional[list[LLMMediaAttachment]] = None,
         invoke_gen: int = 0,
+        history_user_line_override: Optional[str] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._vm = vmate_manager
         self._user = (user_text or "").strip()
         self._attachments = list(attachments or [])
-        self._history_user_line = format_user_text_for_history(
-            self._user, self._attachments
-        )
+        if history_user_line_override is not None:
+            self._history_user_line = (history_user_line_override or "").strip()
+            if not self._history_user_line:
+                self._history_user_line = format_user_text_for_history(
+                    self._user, self._attachments
+                )
+        else:
+            self._history_user_line = format_user_text_for_history(
+                self._user, self._attachments
+            )
         self._cw = chat_widget
         self._stop_event = stop_event
         self._invoke_gen = int(invoke_gen)

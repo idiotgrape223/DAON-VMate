@@ -12,6 +12,13 @@ import math
 import re
 from typing import Any, Optional
 
+# Core 시스템 프롬프트와 동일한 기본 허용 태그 (프로필 emotionMap 이 비어 있을 때도 한글 [웃음] 등 제거용)
+_DEFAULT_CORE_EMOTION_TAG_KEYS = frozenset(
+    {"neutral", "joy", "sadness", "anger", "fear", "disgust", "surprise", "smirk"}
+)
+
+_ORPHAN_DOUBLE_ASTERISK = re.compile(r"\*\*\s*\*\*")
+
 
 def _coerce_emotion_index(v: Any) -> Optional[int]:
     """emotionMap 값이 int / 정수 float / 숫자 문자열일 때만 인덱스로 인정."""
@@ -59,9 +66,37 @@ def emotion_tags_prompt_instruction(emo_map: dict[str, int]) -> str:
         "답변에는 기본적으로 감정이 드러날 때마다 아래 태그 중 하나를 대괄호 그대로, "
         "가능하면 문장 맨 앞에 붙입니다. 중립일 때는 [neutral]을 쓸 수 있습니다. "
         "한 번에 하나의 태그만 쓰는 것을 권장합니다.\n"
-        f"사용 가능: {parts}\n"
+        f"사용 가능(오직 아래 영문 키만): {parts}\n"
+        "**금지**: 대괄호 안에 한글·한자·그 밖의 임의 단어(예: [웃음], [기쁨], [당황])를 넣지 마세요. "
+        "오직 위 목록의 영문 키만 허용됩니다.\n"
         "예: [joy]오늘 날씨 좋네요!"
     )
+
+
+def _allowed_emotion_tag_keys(emo_map: dict[str, int]) -> set[str]:
+    if emo_map:
+        return {k.strip().lower() for k in emo_map.keys() if isinstance(k, str)}
+    return set(_DEFAULT_CORE_EMOTION_TAG_KEYS)
+
+
+def strip_invalid_emotion_bracket_tokens(text: str, emo_map: dict[str, int]) -> str:
+    """
+    emotionMap 에 없는 [대괄호] 토큰 제거. [웃음]·[laugh] 등 영문 허용 목록 밖 태그를 막음.
+    허용 키는 프로필 emotionMap(없으면 Core 기본 8종).
+    """
+    if not text:
+        return text
+    allowed = _allowed_emotion_tag_keys(emo_map)
+
+    def _repl(m: re.Match[str]) -> str:
+        inner = m.group(1).strip().lower()
+        if inner in allowed:
+            return m.group(0)
+        return ""
+
+    out = re.sub(r"\[([^\]\[\n]{1,64})\]", _repl, text)
+    out = _ORPHAN_DOUBLE_ASTERISK.sub("", out)
+    return out
 
 
 def extract_emotion_indices(text: str, emo_map: dict[str, int]) -> list[int]:
@@ -122,25 +157,26 @@ def strip_assistant_tags_for_pipeline(
     text: str, full_config: Optional[dict[str, Any]]
 ) -> str:
     """
-    스트리밍 배치·TTS 구간용. 현재 live2d.model_folder 프로필의 emotionMap 키에 대응하는 [tag]만 제거.
+    스트리밍 배치·TTS 구간용. 허용 emotionMap [tag] 제거 후, 허용 목록 밖 [한글] 등도 제거.
     """
     if not text or not full_config:
         return text
     live = full_config.get("live2d") or {}
     folder = str(live.get("model_folder", "") or "").strip()
-    if not folder:
-        return text
-    from core.model_profile import effective_profile_for_folder
+    em: dict[str, int] = {}
+    if folder:
+        from core.model_profile import effective_profile_for_folder
 
-    prof = effective_profile_for_folder(folder)
-    em = build_emo_map_from_profile(prof)
-    if not em:
-        return text
-    out = strip_emotion_tags_regex(text, em)
-    keys = sorted(em.keys(), key=len, reverse=True)
-    alt = "|".join(re.escape(k) for k in keys)
-    if text and re.match(rf"(?i)^\s*\[({alt})\]", text):
-        out = out.lstrip()
+        prof = effective_profile_for_folder(folder)
+        em = build_emo_map_from_profile(prof)
+    out = text
+    if em:
+        out = strip_emotion_tags_regex(out, em)
+        keys = sorted(em.keys(), key=len, reverse=True)
+        alt = "|".join(re.escape(k) for k in keys)
+        if text and re.match(rf"(?i)^\s*\[({alt})\]", text):
+            out = out.lstrip()
+    out = strip_invalid_emotion_bracket_tokens(out, em)
     return out
 
 
@@ -275,17 +311,18 @@ def assistant_history_plain(text: str, full_config: Optional[dict[str, Any]]) ->
         return text
     live = full_config.get("live2d") or {}
     folder = str(live.get("model_folder", "") or "").strip()
-    if not folder:
-        return text
-    from core.model_profile import effective_profile_for_folder
+    em: dict[str, int] = {}
+    if folder:
+        from core.model_profile import effective_profile_for_folder
 
-    prof = effective_profile_for_folder(folder)
-    em = build_emo_map_from_profile(prof)
-    if not em:
-        return text
-    out = remove_emotion_tags(text, em)
-    keys = sorted(em.keys(), key=len, reverse=True)
-    alt = "|".join(re.escape(k) for k in keys)
-    if text and re.match(rf"(?i)^\s*\[({alt})\]", text):
-        out = out.lstrip()
+        prof = effective_profile_for_folder(folder)
+        em = build_emo_map_from_profile(prof)
+    out = text
+    if em:
+        out = remove_emotion_tags(text, em)
+        keys = sorted(em.keys(), key=len, reverse=True)
+        alt = "|".join(re.escape(k) for k in keys)
+        if text and re.match(rf"(?i)^\s*\[({alt})\]", text):
+            out = out.lstrip()
+    out = strip_invalid_emotion_bracket_tokens(out, em)
     return out

@@ -419,7 +419,7 @@ class SettingsDialog(QDialog):
         g_llm_behavior = QGroupBox("LLM")
         fl_llm = QFormLayout(g_llm_behavior)
         fl_llm.setSpacing(10)
-        self.chk_thinking_mode = QCheckBox("사고 모드 (Thinking mode)")
+        self.chk_thinking_mode = QCheckBox("실험: 사고 모드 (Thinking mode)")
         self.chk_thinking_mode.setToolTip(
             "켜면 시스템 프롬프트에 지시가 추가되어, 답변 전에 ### 사고 … ### 답변 형식으로 "
             "추론 과정을 먼저 씁니다. MCP 도구 전용 턴은 예외로 마커만 출력합니다.\n"
@@ -431,12 +431,6 @@ class SettingsDialog(QDialog):
 
         g_win = QGroupBox("창 (UI)")
         fw = QFormLayout(g_win)
-        self.spin_w = QSpinBox()
-        self.spin_w.setRange(480, 3840)
-        self.spin_h = QSpinBox()
-        self.spin_h.setRange(360, 2160)
-        fw.addRow("너비 (px)", self.spin_w)
-        fw.addRow("높이 (px)", self.spin_h)
         self.chk_top = QCheckBox("항상 위에 표시")
         self.spin_typing_ms = QSpinBox()
         self.spin_typing_ms.setRange(4, 200)
@@ -454,6 +448,20 @@ class SettingsDialog(QDialog):
         fw.addRow("타이핑 글자/틱", self.spin_typing_chars)
         fw.addRow("캐릭터 모드 창 너비", self.spin_pet_w)
         fw.addRow("캐릭터 모드 창 높이", self.spin_pet_h)
+        self.chk_idle_proactive = QCheckBox(
+            "유휴 시 캐릭터가 먼저 말 걸기"
+        )
+        self.chk_idle_proactive.setToolTip(
+            "설정한 초 동안 이 앱에서 입력·마우스 조작이 없으면 캐릭터가 먼저 말을 걸 수 있습니다. "
+            "첨부는 일반 채팅 전송과 같습니다. 화면 공유를 켠 경우에만 그때의 스냅샷이 포함될 수 있고, "
+            "항상 화면을 보는 기능은 아닙니다."
+        )
+        self.spin_idle_proactive_sec = QSpinBox()
+        self.spin_idle_proactive_sec.setRange(1, 9_999_999)
+        self.spin_idle_proactive_sec.setSuffix(" 초")
+        self.chk_idle_proactive.toggled.connect(self.spin_idle_proactive_sec.setEnabled)
+        fw.addRow(self.chk_idle_proactive)
+        fw.addRow("유휴 판정 시간", self.spin_idle_proactive_sec)
         pet_hint = QLabel(
             """메인 화면은 채팅 중심으로 시작합니다.
             \n드래그 (시점 조작): 캐릭터 모델 위에서 마우스 왼쪽 버튼을 누른 채 움직이면, 캐릭터를 회전시키거나 바라보는 각도를 변경할 수 있습니다. 캐릭터의 다양한 면을 관찰할 때 사용합니다. 
@@ -797,8 +805,6 @@ class SettingsDialog(QDialog):
         )
         self.chk_mouse_tracking.setChecked(bool(ui.get("mouse_tracking", True)))
         self.chk_thinking_mode.setChecked(bool(llm.get("thinking_mode", False)))
-        self.spin_w.setValue(int(ui.get("window_width", 1280)))
-        self.spin_h.setValue(int(ui.get("window_height", 720)))
         self.chk_top.setChecked(bool(ui.get("always_on_top", False)))
         self.chk_dark_mode.setChecked(bool(ui.get("dark_mode", True)))
         self.spin_typing_ms.setValue(
@@ -809,6 +815,16 @@ class SettingsDialog(QDialog):
         )
         self.spin_pet_w.setValue(int(ui.get("pet_window_width", 520)))
         self.spin_pet_h.setValue(int(ui.get("pet_window_height", 720)))
+        self.chk_idle_proactive.setChecked(
+            bool(ui.get("idle_proactive_chat_enabled", False))
+        )
+        _idle_sec = int(ui.get("idle_proactive_chat_sec", 120))
+        _idle_sec = max(
+            self.spin_idle_proactive_sec.minimum(),
+            min(self.spin_idle_proactive_sec.maximum(), _idle_sec),
+        )
+        self.spin_idle_proactive_sec.setValue(_idle_sec)
+        self.spin_idle_proactive_sec.setEnabled(self.chk_idle_proactive.isChecked())
 
         prov = llm.get("provider", "ollama")
         i = self.combo_llm_provider.findText(prov)
@@ -1008,8 +1024,6 @@ class SettingsDialog(QDialog):
         c["live2d"]["auto_emotion_from_assistant"] = self.chk_auto_emotion.isChecked()
         c["ui"]["mouse_tracking"] = self.chk_mouse_tracking.isChecked()
         c["ui"].pop("chat_assistant_name", None)
-        c["ui"]["window_width"] = int(self.spin_w.value())
-        c["ui"]["window_height"] = int(self.spin_h.value())
         c["ui"].pop("transparent_background", None)
         c["ui"]["always_on_top"] = self.chk_top.isChecked()
         c["ui"]["dark_mode"] = self.chk_dark_mode.isChecked()
@@ -1022,6 +1036,8 @@ class SettingsDialog(QDialog):
         c["ui"].pop("desktop_pet_mode", None)
         c["ui"]["pet_window_width"] = int(self.spin_pet_w.value())
         c["ui"]["pet_window_height"] = int(self.spin_pet_h.value())
+        c["ui"]["idle_proactive_chat_enabled"] = self.chk_idle_proactive.isChecked()
+        c["ui"]["idle_proactive_chat_sec"] = int(self.spin_idle_proactive_sec.value())
 
         llm_prov = self.combo_llm_provider.currentText()
         llm_model = self.edit_llm_model.text().strip()
@@ -1102,6 +1118,4 @@ class SettingsDialog(QDialog):
         self.main.apply_ui_from_config()
         self._refresh_mcp_status_label()
         self.main.reload_live2d()
-        if hasattr(self.main, "vmate_manager"):
-            self.main.vmate_manager.reload_from_config(c)
         self.accept()

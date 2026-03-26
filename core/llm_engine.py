@@ -26,21 +26,27 @@ if TYPE_CHECKING:
 
 # settings.yaml의 system_prompt 앞에 API 전달 시 항상 붙는 고정 안내
 CORE_SYSTEM_PROMPT_PREFIX = """## Core System Prompt
-IMPORTANT !!!DO NOT USE EMOTICONS, EMOJIS, OR MARKDOWN!!!
-When responding, you must prefix every sentence with a tag in brackets if an emotion is felt, such as [joy], [sadness], or [neutral]. Use only the tag names listed in the following system instructions. Select one from: [neutral], [joy], [sadness], [anger], [fear], [disgust], [surprise], [smirk]. Example: [joy] The weather is great today!
-Never invent other bracket tags (no Korean or other words inside brackets, e.g. not [당황] or [기쁨]); only the English keys above or those explicitly listed in the [Live2D 감정 태그] section below apply."""
+Emotion tags: when a feeling is expressed, prefix with exactly one allowed tag in ASCII brackets, e.g. [joy] or [neutral]. Allowed keys only: [neutral], [joy], [sadness], [anger], [fear], [disgust], [surprise], [smirk], or the English keys listed under [Live2D 감정 태그] below if that section is present.
+FORBIDDEN inside brackets: any Korean, Chinese, or other non-English word (e.g. NEVER use [웃음], [기쁨], [당황], [laugh]). Wrong tags will be stripped; use only the allowed English keys.
+IMPORTANT: Do not use emoticons, emojis, or Markdown formatting in the reply text."""
 
-THINKING_MODE_SYSTEM_APPEND = """## 사고 모드 (Thinking mode, 활성화됨)
-일반 대화에서는 최종 답을 쓰기 전에 아래 형식을 따르세요.
+THINKING_MODE_SYSTEM_APPEND = """Thinking Mode (Activated)
 
-1) 첫 줄에 `### 사고` 를 쓰고 줄을 바꿉니다.
-2) 그 아래에 가정·단계별 추론·대안 검토 등 사고 과정을 자유롭게 서술합니다(여러 문단 가능).
-3) 사고를 마친 뒤 한 줄에 `### 답변` 만 쓰고 줄을 바꿉니다.
-4) 그 아래부터 기존 캐릭터 규칙대로 감정 태그와 본문을 작성합니다.
+In general conversations, please follow the format below before writing the final answer.
 
-**예외 (반드시 준수)**:
-- MCP 도구 호출이 필요한 응답(<<<DAON_MCP_CALLS>>> 만 포함해야 하는 턴)에는 `### 사고` / `### 답변` 을 쓰지 말고, MCP 안내만 따르세요.
-- 사용자가 한 줄·즉답만 원한다고 명시한 경우에는 사고 블록을 아주 짧게 하거나 생략해도 됩니다."""
+Write ### 사고 on the first line and press enter.
+
+Below that, freely describe your thought process, such as assumptions, step-by-step reasoning, and exploring alternatives (multiple paragraphs are allowed).
+
+Once you finish thinking, write only ### 답변 on a single line and press enter.
+
+Below that, write the main text according to the existing character rules. Use only English emotion tags from the system instructions (e.g. [joy], [neutral]). Never use Korean or other words inside brackets.
+
+Exceptions (Must be strictly followed):
+
+For responses that require an MCP tool call (turns that must only include <<<DAON_MCP_CALLS>>>), do not use ### Thinking / ### Answer, and strictly follow the MCP guidelines instead.
+
+If the user explicitly states they want a one-line or immediate answer, you may keep the thinking block very short or omit it completely.."""
 
 
 def _user_text_suggests_mcp_tools(user_text: str) -> bool:

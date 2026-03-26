@@ -599,7 +599,10 @@ class Live2DExpressionSettingsDialog(QDialog):
         while m is not None:
             cfg = getattr(m, "config", None)
             if isinstance(cfg, dict) and hasattr(m, "vmate_manager"):
-                m.vmate_manager.reload_from_config(m.config)
+                if hasattr(m, "_merged_config_for_vm"):
+                    m.vmate_manager.reload_from_config(m._merged_config_for_vm())
+                else:
+                    m.vmate_manager.reload_from_config(m.config)
                 break
             nxt = getattr(m, "main", None)
             if nxt is not None:

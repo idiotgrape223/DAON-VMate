@@ -117,7 +117,7 @@ def compose_character_prompt_block(folder_name: str, data: dict[str, Any]) -> st
             f"### 이름 (채팅 표시·자기 호칭)\n"
             f"{name}\n"
             "You MUST present as this character. In dialogue, stay consistent with this name/identity. "
-            "The user sees this name as the speaker label in the chat UI."
+            "The user sees this name as the speaker label in the chat UI.\n"
         )
     for key, title in SECTION_KEYS:
         val = str(data.get(key, "") or "").strip()

@@ -14,9 +14,6 @@ llm:
   system_prompt: '[Character Role & Personality]
 
 
-    Name: VMate (Virtual Mate)
-
-
     Identity: 사용자의 가장 가까운 절친이자 다정한 조언자.
 
 
@@ -44,14 +41,14 @@ llm:
     사용자: 나 오늘 회사에서 진짜 어이없는 일 있었어.
 
 
-    VMate: 헐, 무슨 일인데? 누가 우리 OO 괴롭혔어? 얼른 다 말해봐, 내가 다 들어줄게!
+    {model name}: 헐, 무슨 일인데? 누가 우리 OO 괴롭혔어? 얼른 다 말해봐, 내가 다 들어줄게!
 
 
     사용자: 배고픈데 점심 뭐 먹지?
 
 
-    VMate: 음... 오늘은 매콤한 떡볶이 어때? 스트레스 풀기엔 딱이지! 아니면 네가 평소에 좋아하는 그거 먹으러 갈까?'
-  api_key: None
+    {model name}: 음... 오늘은 매콤한 떡볶이 어때? 스트레스 풀기엔 딱이지! 아니면 네가 평소에 좋아하는 그거 먹으러 갈까?'
+  api_key: ''
   character_name: alexia
   timeout_sec: 120
   text_lang: ko
@@ -75,18 +72,20 @@ ui:
   debug_emotion_log: false
   mouse_tracking: false
   window_width: 1200
-  window_height: 712
+  window_height: 710
   always_on_top: false
   typing_interval_ms: 199
   typing_chars_per_tick: 4
   pet_window_width: 516
   pet_window_height: 720
   chat_sidebar_width: 252
+  idle_proactive_chat_enabled: false
+  idle_proactive_chat_sec: 10
 mcp:
   enabled: true
   config_file: mcp_extension/mcp_servers.json
 tts:
-  provider: elevenlabs
+  provider: edge-tts
   api_url: http://127.0.0.1:9880/tts
   edge_voice: ko-KR-SunHiNeural
   openai_tts_model: tts-1
@@ -102,7 +101,7 @@ tts:
   media_type: wav
   streaming_mode: 'false'
   openai_tts_api_key: ''
-  elevenlabs_api_key: sk_3a7d1ebd83f5f18a967dfed84073c3084d2965fdbd9d086a
+  elevenlabs_api_key: ''
   elevenlabs_model: eleven_multilingual_v2
   elevenlabs_voice_id: zgDzx5jLLCqEp6Fl7Kl7
   elevenlabs_output_format: mp3_44100_128

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import copy
 import glob
 import logging
 import os
 import sys
+import time
 from typing import Optional
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QFont,
@@ -66,6 +68,16 @@ from ui.settings_dialog import SettingsDialog
 
 logger = logging.getLogger(__name__)
 
+_IDLE_ACTIVITY_EVENT_TYPES = frozenset(
+    {
+        QEvent.Type.KeyPress,
+        QEvent.Type.MouseButtonPress,
+        QEvent.Type.MouseMove,
+        QEvent.Type.Wheel,
+        QEvent.Type.TouchBegin,
+    }
+)
+
 
 class MainWindow(QMainWindow):
     """히스토리 저장은 LLM 워커 스레드에서 트리거되므로 Signal로 메인 스레드에만 큐잉."""
@@ -101,6 +113,11 @@ class MainWindow(QMainWindow):
         self._pet_floating_chat_placed = False
         self._saved_window_flags: Optional[int] = None
         self._normal_geometry = None
+        self._modal_ui_open = False
+        self._last_user_activity_monotonic = time.monotonic()
+        self._last_idle_proactive_fire_monotonic: Optional[float] = None
+        self._idle_activity_targets: set[QObject] = set()
+        self._resolved_live2d_folder: str = ""
 
         self.setWindowTitle("DAON-VMate")
         self.resize(ui_config.get('window_width', 1280), ui_config.get('window_height', 720))
@@ -229,7 +246,82 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
 
+        self._install_idle_activity_event_filters()
+        self._idle_proactive_timer = QTimer(self)
+        self._idle_proactive_timer.setInterval(1000)
+        self._idle_proactive_timer.timeout.connect(self._tick_idle_proactive_chat)
+        self._idle_proactive_timer.start()
+
+    def _iter_idle_activity_objects(self):
+        yield self
+        yield self._central_widget
+        yield self._main_splitter
+        yield self._chat_history_sidebar
+        side = self._chat_history_sidebar
+        if hasattr(side, "_list"):
+            yield side._list
+        if hasattr(side, "_list_viewport"):
+            yield side._list_viewport
+        yield self._live2d_area
+        yield self.live2d_view
+        yield self._top_bar
+        cw = self.chat_widget
+        yield cw
+        yield cw.input_field
+        yield cw.scroll
+        yield cw.scroll.viewport()
+        yield cw.history_widget
+        yield cw.btn_send
+        yield cw.btn_attach
+        yield cw.btn_interrupt
+        sp = self._main_splitter
+        try:
+            n = sp.count()
+        except Exception:
+            n = 0
+        for i in range(1, n):
+            try:
+                h = sp.handle(i)
+            except Exception:
+                h = None
+            if h is not None:
+                yield h
+
+    def _install_idle_activity_event_filters(self) -> None:
+        self._idle_activity_targets.clear()
+        for o in self._iter_idle_activity_objects():
+            if o is None:
+                continue
+            o.installEventFilter(self)
+            self._idle_activity_targets.add(o)
+
+    def touch_user_activity(self) -> None:
+        self._last_user_activity_monotonic = time.monotonic()
+
+    def _tick_idle_proactive_chat(self) -> None:
+        if getattr(self, "_modal_ui_open", False):
+            return
+        ui = self.config.get("ui", {})
+        if not bool(ui.get("idle_proactive_chat_enabled", False)):
+            return
+        idle_sec = int(ui.get("idle_proactive_chat_sec", 120))
+        idle_sec = max(1, idle_sec)
+        now = time.monotonic()
+        if not hasattr(self, "chat_widget") or self.chat_widget.is_pipeline_busy():
+            return
+        if (now - self._last_user_activity_monotonic) < float(idle_sec):
+            return
+        if self._last_idle_proactive_fire_monotonic is not None:
+            if (now - self._last_idle_proactive_fire_monotonic) < float(idle_sec):
+                return
+        self._last_idle_proactive_fire_monotonic = now
+        if not self.chat_widget.send_idle_proactive_message():
+            self._last_idle_proactive_fire_monotonic = None
+
     def eventFilter(self, watched, event):
+        if self._idle_activity_targets and watched in self._idle_activity_targets:
+            if event.type() in _IDLE_ACTIVITY_EVENT_TYPES:
+                self.touch_user_activity()
         if watched is getattr(self, "_live2d_area", None) and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._sync_live2d_overlays)
             return False
@@ -367,8 +459,14 @@ class MainWindow(QMainWindow):
             finally:
                 self.live2d_view.doneCurrent()
 
-    def open_settings(self):
-        SettingsDialog(self).exec()
+    def open_settings(self) -> None:
+        self.touch_user_activity()
+        self._modal_ui_open = True
+        try:
+            SettingsDialog(self).exec()
+        finally:
+            self._modal_ui_open = False
+            self.touch_user_activity()
 
     def _populate_screen_share_menu(self) -> None:
         m = self._screen_share_menu
@@ -435,12 +533,17 @@ class MainWindow(QMainWindow):
                 "선택할 수 있는 창이 없습니다.",
             )
             return
-        dlg = WindowPickerDialog(self, wins)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        h = dlg.selected_hwnd()
-        if h is not None:
-            self._start_screen_share_hwnd(h)
+        self._modal_ui_open = True
+        try:
+            dlg = WindowPickerDialog(self, wins)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            h = dlg.selected_hwnd()
+            if h is not None:
+                self._start_screen_share_hwnd(h)
+        finally:
+            self._modal_ui_open = False
+            self.touch_user_activity()
 
     def _tick_screen_share_capture(self) -> None:
         pm = QPixmap()
@@ -644,7 +747,19 @@ class MainWindow(QMainWindow):
         )
 
     def current_live2d_model_folder(self) -> str:
+        """설정의 model_folder와 실제 로드된 폴더가 다를 때(폴백 로드)는 후자를 씁니다."""
+        r = getattr(self, "_resolved_live2d_folder", "")
+        if isinstance(r, str) and r.strip():
+            return r.strip()
         return str(self.config.get("live2d", {}).get("model_folder", "") or "").strip()
+
+    def _merged_config_for_vm(self) -> dict:
+        """LLM/TTS가 캐릭터 JSON·프로필을 실제 로드 폴더 기준으로 읽도록 설정 사본을 만듭니다."""
+        c = copy.deepcopy(self.config)
+        mf = self.current_live2d_model_folder()
+        if mf:
+            c.setdefault("live2d", {})["model_folder"] = mf
+        return c
 
     def active_chat_session_id(self) -> str | None:
         return self._active_chat_session_id
@@ -1012,6 +1127,7 @@ class MainWindow(QMainWindow):
         return scan_dir(models_dir)
 
     def reload_live2d(self):
+        self._resolved_live2d_folder = ""
         folder_name = self.config.get('live2d', {}).get('model_folder', 'shizuku')
         scale = self.config.get('live2d', {}).get('scale', 0.25)
 
@@ -1027,6 +1143,7 @@ class MainWindow(QMainWindow):
         if target_model:
             # emotionMap·프로필은 실제 로드된 모델 폴더와 맞춤(폴백 시 설정명과 불일치 방지)
             loaded_folder = str(target_model["folder_name"] or "").strip()
+            self._resolved_live2d_folder = loaded_folder or str(folder_name or "").strip()
             self.live2d_view.load_model(
                 target_model["json_path"],
                 scale,
@@ -1038,6 +1155,6 @@ class MainWindow(QMainWindow):
                 "assets/live2d-models 에 모델을 넣으세요."
             )
         if hasattr(self, "vmate_manager"):
-            self.vmate_manager.reload_from_config(self.config)
+            self.vmate_manager.reload_from_config(self._merged_config_for_vm())
         self._maybe_rebind_chat_sessions_for_model()
 
