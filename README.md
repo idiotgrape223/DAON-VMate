@@ -43,17 +43,19 @@
 
 ### TTS
 
-- **Edge TTS** — Microsoft Edge 음성 엔진 기반(`edge-tts`)  
+- **Edge TTS** — Microsoft Edge 음성 엔진 기반(`edge-tts`)
+- **Eleven Labs TTS** — Eleven Labs API 연동
 - **GPT-SoVITS** — HTTP API로 연동되는 음성 합성 백엔드  
 - **OpenAI TTS** — OpenAI Speech API 또는 호환 엔드포인트
 
 ### 현재 개발된 Default MCP (Model Context Protocol)
 
 - **웹 검색** — `mcp_extension`에 포함된 예시 MCP 서버(DuckDuckGo 등)로 검색 도구 연동 가능
+- **파일 조작** - `mcp_extension`에 포함된 예시 workspace내의 파일 조작
 
 ## MCP Server Extension
 
-MCP(Model Context Protocol) **stdio 서버**는 앱 본문(`core/` 등)과 섞지 않고, **`mcp_extension/`을 확장 모듈 영역**으로 두었습니다. 서버마다 `servers/<이름>/` 폴더로 나누어 코드와 설정 조각을 함께 두면, 저장소를 크게 뜯지 않고도 **도구를 추가·교체 관리**하기 쉬워 이 같은 방식을 사용하였습니다.
+MCP(Model Context Protocol) **stdio 서버**는 **`mcp_extension/`을 확장 모듈 영역**으로 두었습니다. 서버마다 `servers/<이름>/` 폴더로 나누어 코드와 설정 조각을 함께 두면, 저장소를 크게 뜯지 않고도 **도구를 추가·교체 관리**하기 쉬워 이 같은 방식을 사용하였습니다.
 
 ### 설정이 합쳐지는 방식
 
@@ -106,8 +108,6 @@ python -m venv .venv
 pip install -r requirements.txt
 python main.py
 ```
-
-assets/live2d-models의 기본 모델을 이용하여 테스트 해볼 수 있습니다. 추후, 모델 추가관련 부분을 손 봐서 live2d 모델 추가를 좀 더 쉽게 할 수 있도록 수정 할 예정입니다.
 
 ---
 
