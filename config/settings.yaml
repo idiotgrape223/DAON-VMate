@@ -101,7 +101,7 @@ tts:
   media_type: wav
   streaming_mode: 'false'
   openai_tts_api_key: ''
-  elevenlabs_api_key: sk_3a7d1ebd83f5f18a967dfed84073c3084d2965fdbd9d086a
+  elevenlabs_api_key: ''
   elevenlabs_model: eleven_multilingual_v2
   elevenlabs_voice_id: zgDzx5jLLCqEp6Fl7Kl7
   elevenlabs_output_format: mp3_44100_128
